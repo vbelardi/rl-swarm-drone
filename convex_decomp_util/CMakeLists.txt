@@ -7,7 +7,7 @@ endif()
 
 
 set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_DEBUG "-g") 
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -fno-tree-ccp")
 
 find_package(decomp_util)

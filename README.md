@@ -1,127 +1,123 @@
-# Multi-Agent Planning Packages
-The code for the paper "High-Speed Motion Planning for Aerial Swarms in Unknown and Cluttered Environments", by Charbel Toumieh and Dario Floreano, published in [IEEE Transactions on Robotics](https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=10599811) - ([pdf](https://arxiv.org/abs/2402.19033), [video](https://youtu.be/Af8mODuES4s)).
 
-The packages have been tested on **Ubuntu 22.04**, **ROS2 Humble**. The simulations have been run on **Intel i9-13900K** CPU and **NVidia RTX 4090** GPU.
+# Guide d'installation et de configuration
 
-**This project is continuously under development.**
+Ce document détaille l'installation de Gurobi, la compilation et l'exécution des différents packages nécessaires pour le projet.
 
-|10 agents circular exchange (forest) | 10 agents traversing forest / wall / forest |
-| ------------------------- | ------------------------- |
-<a target="_blank" href="https://youtu.be/Af8mODuES4s"><img src="./imgs/circular.gif" width="313" height="275" alt="circular exchange"></a> |<a target="_blank" href="https://youtu.be/Af8mODuES4s"><img src="./imgs/linear.gif" width="440" height="275" alt="linear navigation"></a> |
+---
 
-|10 agents traversing loops | Hardware experiments on nano-drones (Crazyflie)|
-| ------------------------- | ------------------------- |
-|<a target="_blank" href="https://youtu.be/Af8mODuES4s"><img src="./imgs/loops.gif" width="313" height="275" alt="loops"></a> | <a target="_blank" href="https://youtu.be/Af8mODuES4s"><img src="./imgs/hardware.gif" width="440" height="275" style="margin:20px 20px" alt="hardware"></a>|
+## 1. Installation de Gurobi
 
-To get started you can skip to [Getting Started](#Getting-Started). This repo contains the following packages:
-* `convex_decomp_util`: package for Safe Corridor generation based on [[1]](#1) and [[2]](#2).
-* `decomp_ros`: package for Safe Corridor generation and visualization based on [[3]](#3).
-* `env_builder`: ROS2 package that allows to build an evironment in the form of voxel grid and publishes it in the form of a pointcloud for visualization in rviz2.
-* `jps3d`: a modified version of [jps3d](https://github.com/KumarRobotics/jps3d) that checks for traversibilty when generating a path to make sure we can generate a Safe Corridor around it.
-* `mapping_util`: ROS2 package for voxel grid generation (clearing out voxels that are in the field of view of the drone).
-* `path_finding_util`: package for path finding and path tools such as path shortening.
-* `voxel_grid_util`: package for voxel grid class and raycasting function.
-* `multi_agent_planner`: ROS2 package for multi-agent planning (uses all the other packages).
+Pour installer Gurobi, suivez ces instructions :
 
-At the end of this documentation you can find:
-* [Improvements](#Improvements): improvements to the packages that are yet to be implemented.
-* [References](#References): references used throughout this text.
-* [Citation](#Citation): bibtex citation for latex.
+### 1.1. Télécharger Gurobi
 
+- Téléchargez Gurobi 10.0.* depuis le site officiel : [Gurobi Downloads](https://www.gurobi.com/downloads/).
+- Suivez les instructions d'installation de Gurobi pour votre système.
 
-## Getting Started
-### Install gurobi
-Download gurobi 10.0.* from this [link](https://www.gurobi.com/downloads/gurobi-software/). Follow the installation instructions in this [link](https://support.gurobi.com/hc/en-us/articles/4534161999889-How-do-I-install-Gurobi-Optimizer-). Finally, install the license by going to this [link](https://portal.gurobi.com/), creating a license and installing it (instructions on how to install it are shown when you create it).
+### 1.2. Installer la licence Gurobi
 
-Then, build gurobi and copy the library:
-``` shell script
-cd /opt/gurobi1002/linux64/src/build  #Note that the name of the folder gurobi1002 changes according to the Gurobi version
-sudo make
-sudo cp libgurobi_c++.a ../../lib/
-```
+- Rendez-vous sur le [Centre de licences Gurobi](https://www.gurobi.com/downloads/end-user-license-agreement/), créez votre licence et suivez les instructions affichées pour l'installer.
 
-### Create and build workspace
-Create a ROS2 workspace and clone the repo inside the `src` folder of the workspace (or simply clone it inside an existing workspace), then build it: 
-``` shell script
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
-git clone https://github.com/lis-epfl/multi_agent_pkgs
-cd ..
-colcon build --symlink-install --packages-select jps3d decomp_util convex_decomp_util path_finding_util voxel_grid_util decomp_ros_msgs decomp_ros_utils 
-source install/setup.bash
-colcon build --symlink-install --packages-select env_builder_msgs env_builder mapping_util multi_agent_planner_msgs multi_agent_planner
-```
+### 1.3. Compiler Gurobi et copier la bibliothèque
 
-## Running the simulation
-To switch between a known and unknown envrionment, you can set the variable `free_grid` in the launch file to `true` and `false` respectively.
-### Multiple agents in a circular configuration
-Launch rviz2 in a terminal (if you didn't build `decomp_ros_util` due to OGRE conflicts, the polyhedra will not appear).
-``` shell script
-cd ~/ros2_ws
-. install/setup.bash
-rviz2 -d ~/ros2_ws/src/multi_agent_pkgs/multi_agent_planner/rviz/rviz_config_multi.rviz
-```
-Launch the environment in another window (if you want an empty environement replace `env_builder.launch.py` with `env_builder_empty.launch.py`):
-``` shell script
-cd ~/ros2_ws
-. install/setup.bash
-ros2 launch env_builder env_builder.launch.py
-```
-Launch the agents in another window. If you want each agent to run in a different terminal, uncomment the `prefix=['xterm -fa default -fs 10 -hold -e']` line in the launch file:
-``` shell script
-cd ~/ros2_ws
-. install/setup.bash
-ros2 launch multi_agent_planner multi_agent_planner_circle.launch.py
-```
+1. Rendez-vous dans le répertoire de build de Gurobi :
 
-### Multiple agents going through forest + wall + forest 
-Launch rviz2 in a terminal (if you didn't build `decomp_ros_util` due to OGRE conflicts, the polyhedra will not appear).
-``` shell script
-cd ~/ros2_ws
-. install/setup.bash
-rviz2 -d ~/ros2_ws/src/multi_agent_pkgs/multi_agent_planner/rviz/rviz_config_multi.rviz
-```
-Launch the environment in another window:
-``` shell script
-cd ~/ros2_ws
-. install/setup.bash
-ros2 launch env_builder env_builder.launch.py
-```
-Launch the agents in another window. If you want each agent to run in a different terminal, uncomment the `prefix=['xterm -fa default -fs 10 -hold -e']` line in the launch file:
-``` shell script
-cd ~/ros2_ws
-. install/setup.bash
-ros2 launch multi_agent_planner multi_agent_planner_long.launch.py
-```
+   ```bash
+   cd /opt/gurobi1002/linux64/src/build
+   # Remarque : le nom du dossier peut varier selon la version (exemple : gurobi1002)
+   ```
 
-## Improvements
-These are the potential structural improvements:
-* The `jps3d` package should be integrated in the `path_finding_util` package. 
+2. Compilez Gurobi :
 
-These are the potential parametric improvements:
-* Tuning the parameters for speed modulation to go faster in free environments.
+   ```bash
+   sudo make
+   ```
 
-These are the potential future features under development:
-* Dealing with dynamic obstacles.
-* Dealing with deadlocks when passing through narrow gaps from opposite directions.
+3. Copiez la bibliothèque compilée :
 
-## References
-<a id="1">[1]</a>
-Toumieh, C. and Lambert, A., 2022. Voxel-grid based convex decomposition of 3d space for safe corridor generation. Journal of Intelligent & Robotic Systems, 105(4), p.87.
+   ```bash
+   sudo cp libgurobi_c++.a ../../lib/
+   ```
 
-<a id="2">[2]</a>
-Toumieh, C. and Lambert, A., 2022. Shape-aware Safe Corridors Generation using Voxel Grids. arXiv preprint arXiv:2208.06111
+---
 
-<a id="3">[3]</a>
-Liu, S., Watterson, M., Mohta, K., Sun, K., Bhattacharya, S., Taylor, C.J. and Kumar, V., 2017. Planning dynamically feasible trajectories for quadrotors using safe flight corridors in 3-d complex environments. IEEE Robotics and Automation Letters, 2(3), pp.1688-1695.
+## 2. Compilation des packages ROS2
 
-## Citation
-```bibtex
-@article{toumieh2024high,
-  title={High-speed motion planning for aerial swarms in unknown and cluttered environments},
-  author={Toumieh, Charbel and Floreano, Dario},
-  journal={IEEE Transactions on Robotics},
-  year={2024},
-  publisher={IEEE}
-}
-```
+Après avoir installé Gurobi, procédez à la compilation des packages suivants.
+
+1. **Compilation du premier ensemble de packages :**
+
+   ```bash
+   colcon build --symlink-install --packages-select jps3d decomp_util convex_decomp_util path_finding_util voxel_grid_util decomp_ros_msgs decomp_ros_utils
+   ```
+
+2. **Sourcer le setup :**
+
+   ```bash
+   source install/setup.bash
+   ```
+
+3. **Compilation du second ensemble de packages :**
+
+   ```bash
+   colcon build --symlink-install --packages-select env_builder_msgs env_builder mapping_util multi_agent_planner_msgs multi_agent_planner global_map rl_interface
+   ```
+
+---
+
+## 3. Lancement et exécution du système
+
+Utilisez les commandes ci-dessous pour démarrer les différents composants de votre système :
+
+1. **Lancer RViz2 :**
+
+   ```bash
+   cd ~/clean_swarm
+   source install/setup.bash
+   rviz2 -d ~/clean_swarm/src/multi_agent_pkgs/multi_agent_planner/rviz/rviz_config_multi.rviz
+   ```
+
+2. **Lancer l'assembleur d'environnement :**
+
+   ```bash
+   cd ~/clean_swarm
+   source install/setup.bash
+   ros2 launch env_builder env_builder.launch.py
+   ```
+
+3. **Lancer le multi-agent planner avec reinforcement learning :**
+
+   ```bash
+   cd ~/clean_swarm
+   source install/setup.bash
+   ros2 launch multi_agent_planner multi_agent_planner_RL.launch.py
+   ```
+
+4. **Lancer le constructeur de carte globale :**
+
+   ```bash
+   cd ~/clean_swarm
+   source install/setup.bash
+   ros2 launch global_map global_map_builder.launch.py
+   ```
+
+5. **Lancer l'interface de reinforcement learning :**
+
+   ```bash
+   cd ~/clean_swarm
+   source venv/bin/activate
+   source install/setup.bash
+   ros2 launch rl_interface rl.launch.py
+   ```
+
+---
+
+## Notes complémentaires
+
+- Assurez-vous d'être dans le bon environnement (par exemple, activer le virtualenv si nécessaire) avant d'exécuter les commandes.
+- Les chemins indiqués (tel que `~/clean_swarm`) doivent être adaptés à votre structure de répertoire.
+- Certaines étapes, notamment le téléchargement de Gurobi et l'installation de la licence, doivent être réalisées manuellement en suivant les instructions fournies.
+
+---
+
+Ce fichier README fournit une documentation complète pour configurer et lancer votre projet. En cas de problème, consultez la documentation spécifique de Gurobi.
