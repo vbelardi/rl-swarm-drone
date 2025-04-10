@@ -1,0 +1,8 @@
+[project]
+name = "rl_interface"
+version = "0.0.1"
+dependencies = ["gymnasium"]
+
+[project.scripts]
+rl_node = "rl_interface.rl_node:main"
+grid_world = "rl_interface.grid_world:main"
