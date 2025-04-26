@@ -22,8 +22,8 @@ int main(int argc, char ** argv){
   std::shared_ptr<VoxelMapUtil> map_util = std::make_shared<VoxelMapUtil>();
   map_util->setMap(reader.origin(), reader.dim(), reader.data(), reader.resolution());
 
-  const Vec3f start(reader.start(0), reader.start(1), reader.start(2));
-  const Vec3f goal(reader.goal(0), reader.goal(1), reader.goal(2));
+  Vec3f start(reader.start(0), reader.start(1), reader.start(2));
+  Vec3f goal(reader.goal(0), reader.goal(1), reader.goal(2));
 
   std::unique_ptr<JPSPlanner3D> planner_ptr(new JPSPlanner3D(true)); // Declare a planner
   planner_ptr->setMapUtil(map_util); // Set collision checking function

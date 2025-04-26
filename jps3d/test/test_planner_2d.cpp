@@ -28,8 +28,8 @@ int main(int argc, char **argv) {
   map_util->setMap(reader.origin(), reader.dim(), reader.data(),
                    reader.resolution());
 
-  const Vec2f start(reader.start(0), reader.start(1));
-  const Vec2f goal(reader.goal(0), reader.goal(1));
+  Vec2f start(reader.start(0), reader.start(1));
+  Vec2f goal(reader.goal(0), reader.goal(1));
 
   std::unique_ptr<JPSPlanner2D> planner_ptr(
       new JPSPlanner2D(false));      // Declare a planner

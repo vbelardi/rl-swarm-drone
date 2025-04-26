@@ -44,7 +44,7 @@ class JPSPlanner
     ///Must be called before run the planning thread
     void updateMap();
     ///Planning function
-    bool plan(const Vecf<Dim> &start, const Vecf<Dim> &goal, decimal_t eps = 1, bool use_jps = true);
+    bool plan(const Vecf<Dim> &start, Vecf<Dim> &goal, decimal_t eps = 1, bool use_jps = true);
     ///Get the nodes in open set
     vec_Vecf<Dim> getOpenSet() const;
     ///Get the nodes in close set
