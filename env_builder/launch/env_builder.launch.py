@@ -13,6 +13,7 @@ def generate_launch_description():
         'config',
         #'env_default_config.yaml'
         #'env_long_config.yaml'
+        #'env_RL20_config_rand_3.yaml'
         'env_RL20_config.yaml'
         #'env_test_config.yaml'
         #'env_small_config.yaml'

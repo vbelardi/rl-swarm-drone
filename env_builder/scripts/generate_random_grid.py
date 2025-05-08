@@ -50,8 +50,10 @@ def write_config_file(filename, voxel_grid, seed):
 
 if __name__ == "__main__":
     ##################### PARAMETERS FOR YOUR RANDOM ENVIRONMENT HERE ##################
-    config_filename = "env_RL20_config"
-    seed = 14
+    config_filename = "env_RL20_config_rand_3"
+    seed = 3
+    #good seed :
+    #seed = 14
 
     # Voxel Grid parameters
     dimension = [20.0, 20.0, 6.0]  # meters

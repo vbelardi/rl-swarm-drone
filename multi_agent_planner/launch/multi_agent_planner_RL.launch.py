@@ -29,8 +29,8 @@ def generate_launch_description():
     save_stats = True
 
     # calculate equidistant start and goal positions on the circle
-    start_positions = [(10.0, 10.0, 2.5, 0, 0, 0, 0, 0, 0)]
-    goal_positions = [(20.5, 20.5, 2.0, 0, 0, 0, 0, 0, 0)]
+    start_positions = [(10.0, 9.0, 2.5, 0, 0, 0, 0, 0, 0)]
+    goal_positions = [(10.0, 9.0, 2.5, 0, 0, 0, 0, 0, 0)]
 
     # create mapping nodes
     if use_mapping_util:
@@ -70,7 +70,7 @@ def generate_launch_description():
             executable='agent_node',
             name='agent_node_{}'.format(i),
             parameters=[config_planner] + params_sub,
-            # prefix=['xterm -fa default -fs 5 -xrm "XTerm*selectToClipboard: true" -e gdb -ex run --args'],
+            # prefix=['xterm -fa default -fs 10 -xrm "XTerm*selectToClipboard: true" -e gdb -ex run --args'],
             # prefix=['xterm -fa default -fs 10 -hold -e'],
             # prefix=prefix_tmp,
             output='screen',
