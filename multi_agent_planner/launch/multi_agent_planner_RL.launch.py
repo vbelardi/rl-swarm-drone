@@ -29,8 +29,8 @@ def generate_launch_description():
     save_stats = True
 
     # calculate equidistant start and goal positions on the circle
-    start_positions = [(10.0, 9.0, 2.5, 0, 0, 0, 0, 0, 0)]
-    goal_positions = [(10.0, 9.0, 2.5, 0, 0, 0, 0, 0, 0)]
+    start_positions = [(10.0, 10.0, 2.5, 0, 0, 0, 0, 0, 0)]
+    goal_positions = [(10.0, 10.0, 2.5, 0, 0, 0, 0, 0, 0)]
 
     # create mapping nodes
     if use_mapping_util:

@@ -79,117 +79,8 @@ def downsample_voxel_grid_priority(voxel_input, output_size):
     voxel_down = voxel_down.permute(0, 4, 1, 2, 3).float()  # (B,3,D2,H2,W2)
     return voxel_down
 
-'''
-class CustomCombinedExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim=256):
-        """
-        Custom extractor for observation dict:
-          - "observation": a 3D voxel grid of shape (D, H, W)
-          - "drone_positions": a low-dimensional vector
-        """
-        super(CustomCombinedExtractor, self).__init__(observation_space, features_dim)
-
-        self.original_voxel_shape = observation_space.spaces["observation"].shape[:3]
-        self.downsampled_shape = (40, 40, 12)
-
-        self.cnn3d = nn.Sequential(
-            nn.Conv3d(3, 16, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Conv3d(16, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Conv3d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            nn.Flatten()
-        )
-
-        dummy_voxel = torch.zeros(1, 3, *self.downsampled_shape)
-        cnn_output_dim = self.cnn3d(dummy_voxel).shape[1]
-
-        fusion_input_dim = cnn_output_dim + 3  # 3 for drone_positions
-        self.fusion_mlp = nn.Sequential(
-            nn.Linear(fusion_input_dim, features_dim),
-            nn.ReLU()
-        )
-
-        self._features_dim = features_dim
-
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        voxel = observations["observation"]  # (B, D, H, W)
-
-        # One-hot encoding
-        channel_unknown  = (voxel == 0).unsqueeze(1).float()
-        channel_free     = (voxel == 1).unsqueeze(1).float()
-        channel_obstacle = (voxel == 2).unsqueeze(1).float()
-        voxel_input = torch.cat([channel_unknown, channel_free, channel_obstacle], dim=1)  # (B, 3, D, H, W)
-
-        # Downsample
-        voxel_input_downsampled = downsample_voxel_grid_priority(voxel_input, self.downsampled_shape)
-
-        # CNN
-        cnn_features = self.cnn3d(voxel_input_downsampled)
-
-        # Concatenate witorch drone position
-        fused = torch.cat([cnn_features, observations["drone_positions"]], dim=1)
-        features = self.fusion_mlp(fused)
-        return features
-
-
-class CustomCombinedExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim=256):
-        super().__init__(observation_space, features_dim)
-        D,H,W = observation_space.spaces["observation"].shape
-        self.downsampled_shape = (40, 40, 12)
-        # CNN 3D de base
-        self.cnn3d = nn.Sequential(
-            nn.Conv3d(3, 8, 3, padding=1), nn.ReLU(), nn.MaxPool3d(2),
-            nn.Conv3d(8,16,3,padding=1),    nn.ReLU(), nn.MaxPool3d(2),
-            nn.Conv3d(16,32,3,padding=1),    nn.ReLU(), nn.MaxPool3d(2),
-            nn.Flatten()
-        )
-        # dimension après CNN
-        with torch.no_grad():
-            dummy = torch.zeros(1,3,*self.downsampled_shape)
-            cnn_out = self.cnn3d(dummy).shape[1]
-        # projection CNN → 512
-        self.cnn_proj = nn.Sequential(
-            nn.Linear(cnn_out, 512), nn.ReLU(),
-            nn.Dropout(0.1), nn.LayerNorm(512)
-        )
-        # MLP position → 256
-        pos_dim = observation_space.spaces["drone_positions"].shape[0]
-        self.position_mlp = nn.Sequential(
-            nn.Linear(pos_dim, 64), nn.ReLU(),
-            nn.Linear(64, 128), nn.ReLU(),
-            nn.Linear(128, 256), nn.ReLU(),
-            nn.LayerNorm(256)
-        )
-
-        # fusion → features_dim
-        self.fusion_mlp = nn.Sequential(
-            nn.Linear(512 + 256, features_dim),
-            nn.ReLU(),
-            nn.LayerNorm(features_dim)
-        )
-
-        self._features_dim = features_dim
-
-    def forward(self, obs):
-        vox = obs["observation"]             # (B,D,H,W)
-        unk  = (vox==0).unsqueeze(1).float()
-        free = (vox==1).unsqueeze(1).float()
-        obs_ = (vox==2).unsqueeze(1).float()
-        x = torch.cat([unk,free,obs_], dim=1) # (B,3,D,H,W)
-        x = downsample_voxel_grid_priority(x, self.downsampled_shape)
-        c = self.cnn3d(x)
-        c = self.cnn_proj(c)
-        p = self.position_mlp(obs["drone_positions"])
-        return self.fusion_mlp(torch.cat([c,p], dim=1))
 
 '''
-
 class Custom3DGridExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, features_dim=256):
         super().__init__(observation_space, features_dim)
@@ -231,6 +122,55 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
         p = self.pos_mlp(obs["drone_positions"])
         return self.fuse(torch.cat([c,p],1))
 
+'''
+
+
+class Custom3DGridExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=256):
+        super().__init__(observation_space, features_dim)
+        D, H, W = observation_space.spaces["observation"].shape
+        # 3D CNN
+        self.cnn3d = nn.Sequential(
+            nn.Conv3d(3, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
+            nn.Conv3d(32, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
+            nn.Conv3d(32,64,3,2,1), nn.ReLU(),
+            nn.Conv3d(64,64,3,2,1), nn.ReLU(),
+            nn.Conv3d(64,128,3,1,1), nn.ReLU(),
+            nn.Conv3d(128,128,3,1,1), nn.ReLU(),
+            nn.Flatten()
+        )
+        with torch.no_grad():
+            d = D//4; h = H//4; w = W//4
+            dummy = torch.zeros(1,3,d,h,w)
+            flat = self.cnn3d(dummy).shape[1]
+        # position MLP
+        self.pos_mlp = nn.Sequential(
+            nn.Linear(3,32), nn.ReLU(),
+            nn.Linear(32,64), nn.ReLU(),
+            nn.Linear(64,64), nn.ReLU(),
+        )
+        # fusion
+        self.fuse = nn.Sequential(
+            nn.Linear(flat+64,2048), nn.ReLU(),
+            nn.Linear(2048,1024), nn.ReLU(),
+            nn.Linear(1024,512), nn.ReLU(),
+            nn.Linear(512,features_dim), nn.ReLU()
+        )
+        self._features_dim = features_dim
+
+    def forward(self, obs):
+        v = obs["observation"].long()
+        u = (v==0).unsqueeze(1).float()
+        f = (v==1).unsqueeze(1).float()
+        o = (v==2).unsqueeze(1).float()
+        x = torch.cat([u,f,o],dim=1)
+        _, D, H, W = obs["observation"].shape
+        x = F.adaptive_avg_pool3d(x, output_size=(D//4, H//4, W//4))
+        c = self.cnn3d(x)
+        p = self.pos_mlp(obs["drone_positions"])
+        return self.fuse(torch.cat([c,p],1))
+
+
 
 # ------------------------- Dummy Env for Model Loading -------------------------
 
@@ -251,12 +191,13 @@ class RLSubscriber(Node):
         self.pos_sub_ = {}
         self.agent_goal_curr_ = [[] for _ in range(self.n_rob_)]
         self.agent_pos_curr_ = [[1.0, 1.0, 1.0] for _ in range(self.n_rob_)]
-        self.time_goal_publish = 3.0
+        self.time_goal_publish = 0.1
         self.grid_real_dim = grid_real_dim
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
-        self.sleep_between_obs = 1
+        self.sleep_between_obs = 2.0
+        self.old_time = time.time()
         self.lstm_states = None
         self.dones = np.array([True], dtype=bool)
 
@@ -277,7 +218,7 @@ class RLSubscriber(Node):
         self.timer_ = self.create_timer(self.time_goal_publish, self.timer_callback)
 
         self.actor_model = RecurrentPPO.load(
-            "rppo_3500000_canTrain",
+            "ppo_finetune_12500000_steps",
             custom_objects={
                 "features_extractor_class": Custom3DGridExtractor,
             },
@@ -318,38 +259,81 @@ class RLSubscriber(Node):
         goal_point = drone_position + direction_unit * min_travel
         goal_point = np.clip(goal_point, self.grid_origin + self.margin, self.grid_origin + self.grid_real_dim - self.margin)
         return goal_point
+    
+    def publish_safe_goal_point(self, current_position, goal_point, max_distance=3.0):
+        """
+        Publishes a goal that is at most max_distance away from the current position
+        in the direction of the goal_point.
+        
+        Args:
+            current_position: Current position of the agent
+            goal_point: Target goal point
+            max_distance: Maximum allowed distance for a single move
+        """
+        # Convert to numpy arrays for calculations
+        current_pos = np.array(current_position)
+        goal_pos = np.array(goal_point)
+        
+        # Calculate direction vector
+        direction = goal_pos - current_pos
+        distance = np.linalg.norm(direction)
+        
+        # If already close enough, use the original goal
+        if distance <= max_distance:
+            safe_goal = goal_pos
+        else:
+            # Calculate a shorter goal in the same direction
+            direction_unit = direction / distance
+            safe_goal = current_pos + direction_unit * max_distance
+        
+        # Create and publish the goal message
+        goal_msg = PointStamped()
+        goal_msg.header.frame_id = "world"
+        goal_msg.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = safe_goal.tolist()
+        
+        # Update stored goals and publish
+        self.agent_goal_curr_[0] = safe_goal.tolist()
+        self.goal_pub_[0].publish(goal_msg)
+        
+        self.get_logger().info(f"Published safe goal: {safe_goal.tolist()} for agent_0 (original goal was {goal_point})")
+        
+        return safe_goal
 
     def timer_callback(self):
         if self.gvg is None:
             self.get_logger().warn("Global voxel grid not received yet.")
             return
-        
-        #if len(self.agent_goal_curr_[0]) == 0 or np.linalg.norm(np.array(self.agent_pos_curr_[0]) - np.array(self.agent_goal_curr_[0])) < 0.2:
-        
-        obs = {
-            "observation": self.gvg,
-            "drone_positions": np.array(self.agent_pos_curr_[0]/np.array(self.grid_real_dim), dtype=np.float32).reshape(self.n_rob_* 3,),
-        }
+        time_callback = time.time()
+        if len(self.agent_goal_curr_[0]) == 0 or np.linalg.norm(np.array(self.agent_pos_curr_[0]) - np.array(self.agent_goal_curr_[0])) < 0.5 or time_callback - self.old_time > self.sleep_between_obs:
+            self.old_time = time_callback
+            obs = {
+                "observation": self.gvg,
+                "drone_positions": np.array(self.agent_pos_curr_[0]/np.array(self.grid_real_dim), dtype=np.float32).reshape(self.n_rob_* 3,),
+            }
 
-        actions, self.lstm_states = self.actor_model.predict(obs, state=self.lstm_states, episode_start=self.dones, deterministic=True)
-        actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
-        self.dones = np.array([False], dtype=bool)
-        goal_points = []
-        for i, action in enumerate(actions):
-            current_position = self.agent_pos_curr_[0]
-            goal_point = self.direction_to_goal_point(current_position, action, self.grid_origin, self.grid_real_dim)
-            goal_points.append(goal_point)
-        goal_points = np.array(goal_points)
-        goal = goal_points[0]
+            actions, self.lstm_states = self.actor_model.predict(obs, state=self.lstm_states, episode_start=self.dones, deterministic=True)
+            actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
+            self.dones = np.array([False], dtype=bool)
+            goal_points = []
+            for i, action in enumerate(actions):
+                current_position = self.agent_pos_curr_[0]
+                goal_point = self.direction_to_goal_point(current_position, action, self.grid_origin, self.grid_real_dim)
+                goal_point = self.publish_safe_goal_point(current_position, goal_point)
+                goal_points.append(goal_point)
+            '''
+            goal_points = np.array(goal_points)
+            goal = goal_points[0]
 
-        goal_msg = PointStamped()
-        goal_msg.header.frame_id = "world"
-        goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = goal.tolist()
-        self.agent_goal_curr_[0] = goal.tolist()
-        self.goal_pub_[0].publish(goal_msg)
-        self.get_logger().info(f"Published goal: {goal.tolist()} for agent_0")
-    
+            goal_msg = PointStamped()
+            goal_msg.header.frame_id = "world"
+            goal_msg.header.stamp = self.get_clock().now().to_msg()
+            goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = goal.tolist()
+            self.agent_goal_curr_[0] = goal.tolist()
+            self.goal_pub_[0].publish(goal_msg)
+            self.get_logger().info(f"Published goal: {goal.tolist()} for agent_0")
+            '''
+
     def get_current_obs(self):
         """ Capture une observation actuelle sous forme de dict. """
         obs = {
