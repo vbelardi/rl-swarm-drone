@@ -4,7 +4,7 @@
     local_grid_topic: "agent_0/voxel_grid"  # Topic name for subscribing to local voxel grids
     agent_frame: "agent"  # Frame ID representing the agent in the global map
     world_frame: "world"  # Frame for publishing the voxel grid in
-    n_rob: 1 # Number of robots or agents in the system
+    n_rob: 2 # Number of robots or agents in the system
     id: 0  # ID of the agent; needs to be modified in the launch file in case we have multiple agents
     dimension_global_grid: [20.0, 20.0, 6.0]  # Range of the global voxel grid [x, y, z]
     voxel_grid_range: [4.0, 4.0, 4.0]  # Range of the voxel grid around the agent [x, y, z]

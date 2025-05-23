@@ -14,7 +14,7 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from gymnasium.spaces import Box, Dict
 import time
-
+    
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -23,8 +23,7 @@ voxel_size = 0.3
 grid_real_dim = [20.0, 20.0, 6.0]  # meters
 grid_dim = [67, 67, 20]  # number of voxels
 grid_origin = [0.0, 0.0, 0.0]  # meters
-num_drones = 1
-
+num_drones = 2
 
 
 class Custom3DGridExtractor(BaseFeaturesExtractor):
@@ -48,8 +47,11 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             flat = self.cnn3d(dummy).shape[1]
         # position MLP
         self.pos_mlp = nn.Sequential(
-            nn.Linear(drone_shape,32), nn.ReLU(),
+            nn.Linear(drone_shape[0],32), nn.ReLU(),
             nn.Linear(32,64), nn.ReLU(),
+            nn.Linear(64,64), nn.ReLU(),
+            nn.Linear(64,64), nn.ReLU(),
+            nn.Linear(64,64), nn.ReLU(),
             nn.Linear(64,64), nn.ReLU(),
         )
         # fusion
@@ -94,15 +96,14 @@ class RLSubscriber(Node):
         self.pos_sub_ = {}
         self.agent_goal_curr_ = [[] for _ in range(self.n_rob_)]
         self.agent_pos_curr_ = [[1.0, 1.0, 1.0] for _ in range(self.n_rob_)]
-        self.time_goal_publish = 0.1
         self.grid_real_dim = grid_real_dim
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
-        self.sleep_between_obs = 3.0
-        self.old_time = time.time()
+        self.sleep_between_obs = 2.0
+        self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
         self.lstm_states = None
-        self.dones = np.array([True] * n_rob_, dtype=bool)
+        self.dones = np.array([True] * self.n_rob_, dtype=bool)
 
         for i in range(self.n_rob_):
             pub_name = f"/agent_{i}/goal"
@@ -118,10 +119,8 @@ class RLSubscriber(Node):
         vg_sub_name = "global_map_builder_node/global_voxel_grid"
         self.create_subscription(VoxelGridStamped, vg_sub_name, self.global_vg_callback, 10)
 
-        self.timer_ = self.create_timer(self.time_goal_publish, self.timer_callback)
-
         self.actor_model = RecurrentPPO.load(
-            "ppo_finetune_10000000_steps",
+            "multi_drone_check_9500000_steps",
             custom_objects={
                 "features_extractor_class": Custom3DGridExtractor,
             },
@@ -139,6 +138,62 @@ class RLSubscriber(Node):
         if msg.poses:
             position = msg.poses[0].pose.position
             self.agent_pos_curr_[i] = [position.x, position.y, position.z]
+            
+            # Check if a new goal needs to be published
+            should_update = False
+            current_time = time.time()
+            
+            # Check conditions for publishing a new goal
+            if (len(self.agent_goal_curr_[i]) == 0 or 
+                np.linalg.norm(np.array(self.agent_pos_curr_[i]) - np.array(self.agent_goal_curr_[i])) < 0.01):
+                should_update = True
+            
+            # Also update if we've exceeded the time between observations
+            if current_time - self.agent_last_update_time[i] > self.sleep_between_obs:
+                should_update = True
+            
+            # Only update if needed and if we have the voxel grid
+            if should_update and self.gvg is not None:
+                self.agent_last_update_time[i] = current_time
+                
+                # Get a new goal for this agent
+                self.publish_new_goal_for_agent(i)
+
+    def publish_new_goal_for_agent(self, agent_idx):
+        # Prepare full drone positions array - reshape to make indexing clearer
+        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
+        
+        # Create a copy for normalization
+        normalized_positions = all_drone_positions.copy()
+        
+        # Normalize each drone's position correctly by subtracting origin first
+        for i in range(self.n_rob_):
+            drone_start = i * 3
+            drone_end = (i + 1) * 3
+            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
+        
+        obs = {
+            "observation": self.gvg,
+            "drone_positions": normalized_positions.astype(np.float32),
+        }
+        
+        # Rest of the function remains the same
+        episode_start = False if self.lstm_states is not None else True
+        
+        actions, self.lstm_states = self.actor_model.predict(
+            obs,
+            state=self.lstm_states,
+            episode_start=episode_start,
+            deterministic=True
+        )
+        
+        actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
+        
+        # Process action for the specific drone
+        current_position = self.agent_pos_curr_[agent_idx]
+        goal_point = self.direction_to_goal_point(current_position, actions[agent_idx], self.grid_origin, self.grid_real_dim)
+        goal_point = self.publish_safe_goal_point(current_position, goal_point, agent_idx)
+        self.get_logger().info(f"New goal published for agent_{agent_idx}: {goal_point.tolist()}")
 
     def direction_to_goal_point(self, drone_position, direction_vector, voxel_grid_origin, voxel_grid_dims):
         norm = np.linalg.norm(direction_vector)
@@ -162,63 +217,63 @@ class RLSubscriber(Node):
         goal_point = drone_position + direction_unit * min_travel
         goal_point = np.clip(goal_point, self.grid_origin + self.margin, self.grid_origin + self.grid_real_dim - self.margin)
         return goal_point
-
-    def timer_callback(self):
-        if self.gvg is None:
-            self.get_logger().warn("Global voxel grid not received yet.")
-            return
-            
-        time_callback = time.time()
-        should_update = False
+    
+    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=3.0):
+        """
+        Publishes a goal that is at most max_distance away from the current position
+        in the direction of the goal_point.
         
-        # Check if any drone needs a new goal
-        for i in range(self.n_rob_):
-            if (len(self.agent_goal_curr_[i]) == 0 or 
-                np.linalg.norm(np.array(self.agent_pos_curr_[i]) - np.array(self.agent_goal_curr_[i])) < 0.01):
-                should_update = True
-                break
+        Args:
+            current_position: Current position of the agent
+            goal_point: Target goal point
+            max_distance: Maximum allowed distance for a single move
+        """
+        # Convert to numpy arrays for calculations
+        current_pos = np.array(current_position)
+        goal_pos = np.array(goal_point)
         
-        # Also update if we've exceeded the time between observations
-        if time_callback - self.old_time > self.sleep_between_obs:
-            should_update = True
+        # Calculate direction vector
+        direction = goal_pos - current_pos
+        distance = np.linalg.norm(direction)
         
-        if should_update:
-            self.old_time = time_callback
-            
-            # Prepare full drone positions array
-            all_drone_positions = np.array([pos for pos in self.agent_pos_curr_])
-            normalized_positions = all_drone_positions.flatten() / np.array(self.grid_real_dim).repeat(self.n_rob_)
-            
-            obs = {
-                "observation": self.gvg,
-                "drone_positions": normalized_positions.astype(np.float32),
-            }
-
-            actions, self.lstm_states = self.actor_model.predict(obs, state=self.lstm_states, episode_start=self.dones, deterministic=True)
-            actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
-            self.dones = np.array([False] * self.n_rob_, dtype=bool)
-            
-            # Process actions for each drone
-            for i in range(self.n_rob_):
-                current_position = self.agent_pos_curr_[i]
-                goal_point = self.direction_to_goal_point(current_position, actions[i], self.grid_origin, self.grid_real_dim)
-                
-                goal_msg = PointStamped()
-                goal_msg.header.frame_id = "world"
-                goal_msg.header.stamp = self.get_clock().now().to_msg()
-                goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = goal_point.tolist()
-                self.agent_goal_curr_[i] = goal_point.tolist()
-                self.goal_pub_[i].publish(goal_msg)
-                self.get_logger().info(f"Published goal: {goal_point.tolist()} for agent_{i}")
-
+        # If already close enough, use the original goal
+        if distance <= max_distance:
+            safe_goal = goal_pos
+        else:
+            # Calculate a shorter goal in the same direction
+            direction_unit = direction / distance
+            safe_goal = current_pos + direction_unit * max_distance
+        
+        # Create and publish the goal message
+        goal_msg = PointStamped()
+        goal_msg.header.frame_id = "world"
+        goal_msg.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = safe_goal.tolist()
+        
+        # Update stored goals and publish
+        self.agent_goal_curr_[indice] = safe_goal.tolist()
+        self.goal_pub_[indice].publish(goal_msg)
+        
+        self.get_logger().info(f"Published safe goal: {safe_goal.tolist()} for agent_{indice} (original goal was {goal_point})")
+        
+        return safe_goal
+    
     def get_current_obs(self):
         """ Capture une observation actuelle sous forme de dict. """
         # Prepare full drone positions array
-        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_])
-        normalized_positions = all_drone_positions.flatten() / np.array(self.grid_real_dim).repeat(self.n_rob_)
+        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
+        
+        # Create a copy for normalization
+        normalized_positions = all_drone_positions.copy()
+        
+        # Normalize each drone's position correctly
+        for i in range(self.n_rob_):
+            drone_start = i * 3
+            drone_end = (i + 1) * 3
+            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
         
         obs = {
-            "observation": self.gvg.copy(),  # Important de copier pour ne pas écraser
+            "observation": self.gvg.copy(),
             "drone_positions": normalized_positions.astype(np.float32),
         }
         return obs
