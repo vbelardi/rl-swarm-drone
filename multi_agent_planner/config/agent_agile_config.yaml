@@ -7,7 +7,7 @@
     use_mapping_util: false # whether to use mapping_util as a voxel grid source or env_builder
     topic_name: "agent" # topic prefix for publishing trajectory
     world_frame: "world" # frame for publishing the trajectories, position, path ...
-    n_rob: 2 # number of agents
+    n_rob: 3 # number of agents
     id: 0 # id of the planning agent
     n_x: 9 # number of state variables (9 for jerk control, 6 for acceleration control
     n_u: 3 # number of control variables (3 for jerk/acceleration control)

@@ -14,7 +14,7 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from gymnasium.spaces import Box, Dict
 import time
-    
+
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -23,7 +23,7 @@ voxel_size = 0.3
 grid_real_dim = [20.0, 20.0, 6.0]  # meters
 grid_dim = [67, 67, 20]  # number of voxels
 grid_origin = [0.0, 0.0, 0.0]  # meters
-num_drones = 2
+num_drones = 3
 
 
 class Custom3DGridExtractor(BaseFeaturesExtractor):
@@ -36,9 +36,7 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             nn.Conv3d(3, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
             nn.Conv3d(32, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
             nn.Conv3d(32,64,3,2,1), nn.ReLU(),
-            nn.Conv3d(64,64,3,2,1), nn.ReLU(),
             nn.Conv3d(64,128,3,1,1), nn.ReLU(),
-            nn.Conv3d(128,128,3,1,1), nn.ReLU(),
             nn.Flatten()
         )
         with torch.no_grad():
@@ -50,14 +48,10 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             nn.Linear(drone_shape[0],32), nn.ReLU(),
             nn.Linear(32,64), nn.ReLU(),
             nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
         )
         # fusion
         self.fuse = nn.Sequential(
-            nn.Linear(flat+64,2048), nn.ReLU(),
-            nn.Linear(2048,1024), nn.ReLU(),
+            nn.Linear(flat+64,1024), nn.ReLU(),
             nn.Linear(1024,512), nn.ReLU(),
             nn.Linear(512,features_dim), nn.ReLU()
         )
@@ -74,6 +68,8 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
         c = self.cnn3d(x)
         p = self.pos_mlp(obs["drone_positions"])
         return self.fuse(torch.cat([c,p],1))
+
+
 
 
 
@@ -100,7 +96,7 @@ class RLSubscriber(Node):
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
-        self.sleep_between_obs = 2.0
+        self.sleep_between_obs = 3.0
         self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
         self.lstm_states = None
         self.dones = np.array([True] * self.n_rob_, dtype=bool)
@@ -118,11 +114,22 @@ class RLSubscriber(Node):
 
         vg_sub_name = "global_map_builder_node/global_voxel_grid"
         self.create_subscription(VoxelGridStamped, vg_sub_name, self.global_vg_callback, 10)
+        self.observation_space = Dict({
+            "observation": gym.spaces.Box(low=0, high=2, shape=(67, 67, 20), dtype=np.uint8),
+            "drone_positions": gym.spaces.Box(low=0, high=1, shape=(3*self.n_rob_,), dtype=np.float32)
+        })
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(3*self.n_rob_,), dtype=np.float32)
 
+        self.policy_kwargs = dict(
+            features_extractor_class=Custom3DGridExtractor,
+            features_extractor_kwargs=dict(features_dim=256),
+        )
         self.actor_model = RecurrentPPO.load(
-            "multi_drone_check_9500000_steps",
+            "finalsim_check_23500000_steps",
             custom_objects={
-                "features_extractor_class": Custom3DGridExtractor,
+                "policy_kwargs": self.policy_kwargs,
+                "observation_space": self.observation_space,
+                "action_space": self.action_space,
             },
             device=device,
         )
@@ -218,7 +225,7 @@ class RLSubscriber(Node):
         goal_point = np.clip(goal_point, self.grid_origin + self.margin, self.grid_origin + self.grid_real_dim - self.margin)
         return goal_point
     
-    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=3.0):
+    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=5.0):
         """
         Publishes a goal that is at most max_distance away from the current position
         in the direction of the goal_point.
@@ -290,3 +297,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+

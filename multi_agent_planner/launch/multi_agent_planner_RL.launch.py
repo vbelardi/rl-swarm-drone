@@ -22,15 +22,14 @@ def generate_launch_description():
     )
 
     # define params
-    n_rob = 2
+    n_rob = 3
     voxel_grid_range = [4.0, 4.0, 4.0]
     use_mapping_util = True
     free_grid = True
     save_stats = True
 
-    # calculate equidistant start and goal positions on the circle
-    start_positions = [(1.0, 8.0, 2.5, 0, 0, 0, 0, 0, 0), (1.0, 5.0, 2.5, 0, 0, 0, 0, 0, 0)]
-    goal_positions = [(1.0, 8.0, 2.5, 0, 0, 0, 0, 0, 0), (1.0, 5.0, 2.5, 0, 0, 0, 0, 0, 0)]
+    start_positions = [(1.0, 15.0, 2.5, 0, 0, 0, 0, 0, 0), (1.0, 10.0, 2.5, 0, 0, 0, 0, 0, 0), (1.0, 5.0, 2.5, 0, 0, 0, 0, 0, 0)]
+    goal_positions = [(1.0, 15.0, 2.5, 0, 0, 0, 0, 0, 0), (1.0, 10.0, 2.5, 0, 0, 0, 0, 0, 0), (1.0, 5.0, 2.5, 0, 0, 0, 0, 0, 0)]
 
     # create mapping nodes
     if use_mapping_util:
