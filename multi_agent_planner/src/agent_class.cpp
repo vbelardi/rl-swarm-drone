@@ -363,7 +363,11 @@ void Agent::UpdatePath() {
     ::std::vector<::std::vector<double>> path_out;
     bool valid_path;
     // plan using original method
-    valid_path = GetPath(start, goal_inter, vg_util, path_out);
+    if (!start.empty()){
+      valid_path = GetPath(start, goal_inter, vg_util, path_out);
+    } else {
+      valid_path = false;
+    }
     // plan using new method
     /* valid_path = GetPathNew(start, goal_inter, vg_util, path_out); */
 

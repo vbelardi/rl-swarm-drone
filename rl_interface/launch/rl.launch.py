@@ -11,8 +11,8 @@ def generate_launch_description():
 
     rl_node = Node(
         package='rl_interface',     
-        executable='grid_world',         
-        name='grid_world',              
+        executable='rl_node',
+        name='rl_node',              
         parameters=[config],           
         output='screen',                
         emulate_tty=True                 

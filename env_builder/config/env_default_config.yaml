@@ -1,17 +1,17 @@
 env_builder_node: 
   ros__parameters:
-    origin_grid: [0.0, 0.0, -8.0] # origin of the voxel grid
-    dimension_grid: [40.0, 40.0, 20.0] # dimensions in meters
+    origin_grid: [0.0, 0.0, 0.0] # origin of the voxel grid
+    dimension_grid: [20.0, 20.0, 6.0] # dimensions in meters
     vox_size: 0.3 # voxel size of the grid
     free_grid: true # if true the grid is initialized to free instead of unknown
     multi_obst_size: false # if false, use size_obst as a common size for all obstacles; otherwise use size_obst_multi to define the size of each obstacle
     multi_obst_position: false # if false, generate positions randomly using normal distribution, if true use position_obst_multi to define the position of each obstacle
-    range_obst: [30.0, 30.0, 0.0] # area on the map where to generate obstacles, always positive numbers to move it around, use the origin_obst variable
-    origin_obst: [6.5, 6.5, 0.0] # origin of the area where we generate the obstacles
+    range_obst: [15.0, 15.0, 0.0] # area on the map where to generate obstacles, always positive numbers to move it around, use the origin_obst variable
+    origin_obst: [2.0, 2.0, 0.0] # origin of the area where we generate the obstacles
     size_obst: [0.1, 0.1, 10.0] # height x width x length
     rand_seed: 10 #seed for the random generation of the obstacles
-    n_obst: 180 # 360, 315, 270, 225, 180, 135, 90, number of obstacles (only used if we want to use random generation, otherwise the number of obstacles is inferred from position_obst_vec)
-    rand_seed: 13 #seed for the random generation of the obstacles
+    n_obst: 30 # 360, 315, 270, 225, 180, 135, 90, number of obstacles (only used if we want to use random generation, otherwise the number of obstacles is inferred from position_obst_vec)
+    rand_seed: 1 #seed for the random generation of the obstacles
     size_obst_vec: [0.5, 2.2, 5.0, 0.5, 2.2, 5.0] # x,y,z size of each obstacle concatenated
     position_obst_vec: [0.0, 3.0, 0.0, 0.0, 6.0, 0.0] # x,y,z position of each obstacle concatenated
 

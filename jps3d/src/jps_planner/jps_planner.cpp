@@ -161,11 +161,11 @@ void JPSPlanner<Dim>::updateMap() {
 }
 
 template <int Dim>
-bool JPSPlanner<Dim>::plan(const Vecf<Dim> &start, const Vecf<Dim> &goal, decimal_t eps, bool use_jps) {
-  if(planner_verbose_){
-    std::cout <<"Start: " << start.transpose() << std::endl;
-    std::cout <<"Goal:  " << goal.transpose() << std::endl;
-    std::cout <<"Epsilon:  " << eps << std::endl;
+bool JPSPlanner<Dim>::plan(const Vecf<Dim> &start, Vecf<Dim> &goal, decimal_t eps, bool use_jps) {
+  if (planner_verbose_) {
+    std::cout << "Start: " << start.transpose() << std::endl;
+    std::cout << "Goal:  " << goal.transpose() << std::endl;
+    std::cout << "Epsilon:  " << eps << std::endl;
   }
 
   path_.clear();
@@ -174,7 +174,7 @@ bool JPSPlanner<Dim>::plan(const Vecf<Dim> &start, const Vecf<Dim> &goal, decima
 
   const Veci<Dim> start_int = map_util_->floatToInt(start);
   if (!map_util_->isFree(start_int)) {
-    if(planner_verbose_) {
+    if (planner_verbose_) {
       if (map_util_->isOccupied(start_int))
         printf(ANSI_COLOR_RED "start is occupied!\n" ANSI_COLOR_RESET);
       else if (map_util_->isUnknown(start_int))
@@ -182,65 +182,130 @@ bool JPSPlanner<Dim>::plan(const Vecf<Dim> &start, const Vecf<Dim> &goal, decima
       else {
         printf(ANSI_COLOR_RED "start is outside!\n" ANSI_COLOR_RESET);
         std::cout << "startI: " << start_int.transpose() << std::endl;
-        std::cout <<"Map origin: " << map_util_->getOrigin().transpose() << std::endl;
-        std::cout <<"Map dim: " << map_util_->getDim().transpose() << std::endl;
+        std::cout << "Map origin: " << map_util_->getOrigin().transpose()
+                  << std::endl;
+        std::cout << "Map dim: " << map_util_->getDim().transpose()
+                  << std::endl;
       }
     }
     status_ = 1;
     return false;
   }
 
-  const Veci<Dim> goal_int = map_util_->floatToInt(goal);
+  // Check if goal is free; if not, quickly search for a nearby free voxel.
+  Veci<Dim> goal_int = map_util_->floatToInt(goal);
   if (!map_util_->isFree(goal_int)) {
-    if(planner_verbose_)
-      printf(ANSI_COLOR_RED "goal is not free!\n" ANSI_COLOR_RESET);
-    status_ = 2;
-    return false;
+    if (planner_verbose_)
+      printf(ANSI_COLOR_RED "goal is not free, searching for a nearby free "
+                            "voxel...\n" ANSI_COLOR_RESET);
+
+    const int max_radius = 3; // maximum search radius (in voxels)
+    bool foundCandidate = false;
+    for (int r = 1; r <= max_radius && !foundCandidate; r++) {
+      Veci<Dim> bestCandidate;
+      double bestDistance = std::numeric_limits<double>::max();
+
+      if constexpr (Dim == 2) {
+        for (int dx = -r; dx <= r; dx++) {
+          for (int dy = -r; dy <= r; dy++) {
+            Veci<Dim> candidate = goal_int + Veci<Dim>(dx, dy);
+            if (map_util_->isFree(candidate)) {
+              double dist = std::sqrt(dx * dx + dy * dy);
+              if (dist < bestDistance) {
+                bestDistance = dist;
+                bestCandidate = candidate;
+              }
+            }
+          }
+        }
+      } else if constexpr (Dim == 3) {
+        for (int dx = -r; dx <= r; dx++) {
+          for (int dy = -r; dy <= r; dy++) {
+            for (int dz = -r; dz <= r; dz++) {
+              Veci<Dim> candidate = goal_int + Veci<Dim>(dx, dy, dz);
+              if (map_util_->isFree(candidate)) {
+                double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (dist < bestDistance) {
+                  bestDistance = dist;
+                  bestCandidate = candidate;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // If at least one free candidate was found in this radius, update
+      // goal_int.
+      if (bestDistance < std::numeric_limits<double>::max()) {
+        goal_int = bestCandidate;
+        foundCandidate = true;
+      }
+    }
+
+    if (!foundCandidate) {
+      if (planner_verbose_)
+        printf(
+            ANSI_COLOR_RED
+            "No free candidate found near the goal. Abort!\n" ANSI_COLOR_RESET);
+      status_ = 2;
+      return false;
+    } else {
+      goal = map_util_->intToFloat(goal_int);
+      if (planner_verbose_)
+        std::cout << "Using new goal : " << goal.transpose()
+                  << std::endl;
+    }
   }
 
-  if(cmap_.empty()) {
-    if(planner_verbose_)
-      printf(ANSI_COLOR_RED "need to set cmap, call updateMap()!\n" ANSI_COLOR_RESET);
+  if (cmap_.empty()) {
+    if (planner_verbose_)
+      printf(ANSI_COLOR_RED
+             "need to set cmap, call updateMap()!\n" ANSI_COLOR_RESET);
     return -1;
   }
 
   const Veci<Dim> dim = map_util_->getDim();
 
-  if(Dim == 3) {
-    graph_search_ = std::make_shared<JPS::GraphSearch>(cmap_.data(), dim(0), dim(1), dim(2), eps, planner_verbose_);
-    graph_search_->plan(start_int(0), start_int(1), start_int(2), goal_int(0), goal_int(1), goal_int(2), use_jps);
-  }
-  else {
-    graph_search_ = std::make_shared<JPS::GraphSearch>(cmap_.data(), dim(0), dim(1), eps, planner_verbose_);
-    graph_search_->plan(start_int(0), start_int(1), goal_int(0),  goal_int(1), use_jps);
+  if (Dim == 3) {
+    graph_search_ = std::make_shared<JPS::GraphSearch>(
+        cmap_.data(), dim(0), dim(1), dim(2), eps, planner_verbose_);
+    graph_search_->plan(start_int(0), start_int(1), start_int(2), goal_int(0),
+                        goal_int(1), goal_int(2), use_jps);
+  } else {
+    graph_search_ = std::make_shared<JPS::GraphSearch>(
+        cmap_.data(), dim(0), dim(1), eps, planner_verbose_);
+    graph_search_->plan(start_int(0), start_int(1), goal_int(0), goal_int(1),
+                        use_jps);
   }
 
   const auto path = graph_search_->getPath();
   if (path.size() < 1) {
-    if(planner_verbose_)
-      std::cout << ANSI_COLOR_RED "Cannot find a path from " << start.transpose() <<" to " << goal.transpose() << " Abort!" ANSI_COLOR_RESET << std::endl;
+    if (planner_verbose_)
+      std::cout << ANSI_COLOR_RED "Cannot find a path from "
+                << start.transpose() << " to "
+                << map_util_->intToFloat(goal_int).transpose()
+                << " Abort!" ANSI_COLOR_RESET << std::endl;
     status_ = -1;
     return false;
   }
 
-  //**** raw path, s --> g
+  // Construct raw path (from start to goal)
   vec_Vecf<Dim> ps;
   for (const auto &it : path) {
-    if(Dim == 3) {
+    if (Dim == 3) {
       Veci<Dim> pn;
       pn << it->x, it->y, it->z;
       ps.push_back(map_util_->intToFloat(pn));
-    }
-    else
+    } else {
       ps.push_back(map_util_->intToFloat(Veci<Dim>(it->x, it->y)));
+    }
   }
 
   raw_path_ = ps;
   std::reverse(std::begin(raw_path_), std::end(raw_path_));
 
   // Simplify the raw path
-  //path_ = removeLinePts(raw_path_);
-  //path_ = removeCornerPts(path_);
   path_ = removeCornerPts(raw_path_);
   std::reverse(std::begin(path_), std::end(path_));
   path_ = removeCornerPts(path_);

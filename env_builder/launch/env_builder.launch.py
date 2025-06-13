@@ -11,11 +11,16 @@ def generate_launch_description():
     config = os.path.join(
         get_package_share_directory('env_builder'),
         'config',
-        # 'env_default_config.yaml'
+        #'env_map_loops.yaml'
+        #'env_map_walls.yaml'
+        #'env_map_mixed.yaml'
+        #'env_default_config.yaml'
         #'env_long_config.yaml'
-        # 'env_loop_config.yaml'
+        #'env_RL40_config_rand_3.yaml'
+        'env_RL40x20x6_config.yaml'
+        #'env_RL20_config.yaml'
         #'env_test_config.yaml'
-        'env_small_config.yaml'
+        #'env_small_config.yaml'
     )
     params_sub = [{'publish_period': 0.1}]
     env_builder_node = Node(

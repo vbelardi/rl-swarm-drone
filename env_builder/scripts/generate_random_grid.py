@@ -13,10 +13,10 @@ def write_config_file(filename, voxel_grid, seed):
   
     multi_obst_size: false # if false, use size_obst as a common size for all obstacles; otherwise use size_obst_multi to define the size of each obstacle
     multi_obst_position: true # if false, generate positions randomly using normal distribution, if true use position_obst_multi to define the position of each obstacle
-    range_obst: [3.0, 3.0, 0.0] # area on the map where to generate obstacles, always positive numbers to move it around, use the origin_obst variable
-    origin_obst: [1.0, 1.0, 0.0] # origin of the area where we generate the obstacles
+    range_obst: [34.0, 15.0, 0.0] # area on the map where to generate obstacles, always positive numbers to move it around, use the origin_obst variable
+    origin_obst: [2.0, 2.0, 0.0] # origin of the area where we generate the obstacles
     size_obst: %s # height x width x length
-    n_obst: 3 # 225, 180, 135, 90, number of obstacles (only used if we want to use random generation, otherwise the number of obstacles is inferred from position_obst_vec)
+    n_obst: 50 # 225, 180, 135, 90, number of obstacles (only used if we want to use random generation, otherwise the number of obstacles is inferred from position_obst_vec)
     rand_seed: %i #seed for the random generation of the obstacles
     size_obst_vec: %s # x,y,z size of each obstacle concatenated
     position_obst_vec: %s # x,y,z position of each obstacle concatenated
@@ -50,11 +50,13 @@ def write_config_file(filename, voxel_grid, seed):
 
 if __name__ == "__main__":
     ##################### PARAMETERS FOR YOUR RANDOM ENVIRONMENT HERE ##################
-    config_filename = "env_small_config"
-    seed = 2
+    config_filename = "env_RL40x20x6_config"
+    seed = 3
+    #good seed :
+    #seed = 14
 
     # Voxel Grid parameters
-    dimension = [5.0, 5.0, 5.0]  # meters
+    dimension = [40.0, 20.0, 6.0]  # meters
     voxel_size = 0.3  # meters
     origin = [0.0, 0.0, 0.0]  # meters
 
@@ -94,8 +96,8 @@ if __name__ == "__main__":
 
     # Create a Random volume
     # The containing volume of randomly generated cylinders.
-    rd_volume_cylinders = RandomVolume([[1, 1, 0], [4, 4, 5]], seed)
-    rd_volume_cylinders.add_random_cylinders(3,
+    rd_volume_cylinders = RandomVolume([[2, 2, 0], [36, 18, 5]], seed)
+    rd_volume_cylinders.add_random_cylinders(25,
                                              direction_range=[
                                                  [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
                                              radius_range=[0.05, 0.05],

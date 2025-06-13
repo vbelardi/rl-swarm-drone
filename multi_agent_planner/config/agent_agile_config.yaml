@@ -1,13 +1,13 @@
 /**: 
   ros__parameters:
     get_grid_service_name: "/env_builder_node/get_voxel_grid" # origin frame of the published poinctloud
-    voxel_grid_range: [5.0, 5.0, 5.0] # voxel grid size to request from env_builder; if we are using the mapping util, this should be specified in the config file of the mapping_util
+    voxel_grid_range: [4.0, 4.0, 4.0] # voxel grid size to request from env_builder; if we are using the mapping util, this should be specified in the config file of the mapping_util
     publish_voxel_grid: true # if true, publish the local voxel grid of each agent
     voxel_grid_update_period: 0.2 # voxel grid update period in seconds for requests from env_builder; if we are using the mapping_util, the publishing rate of the env_builder will be the update rate of the voxel grid; there are ros topic messages drops everytime we call the voxel grid service that should be looked at
     use_mapping_util: false # whether to use mapping_util as a voxel grid source or env_builder
     topic_name: "agent" # topic prefix for publishing trajectory
     world_frame: "world" # frame for publishing the trajectories, position, path ...
-    n_rob: 1 # number of agents
+    n_rob: 3 # number of agents
     id: 0 # id of the planning agent
     n_x: 9 # number of state variables (9 for jerk control, 6 for acceleration control
     n_u: 3 # number of control variables (3 for jerk/acceleration control)

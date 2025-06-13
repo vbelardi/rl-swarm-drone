@@ -97,9 +97,9 @@ void GlobalMapBuilder::LocalVoxelGridCallback(const ::env_builder_msgs::msg::Vox
   MergeVoxelGrids(*global_vg_shared_ptr_, local_vg);
   reward = ComputeRewards(*global_vg_shared_ptr_, *global_vg_last_shared_ptr_);
   reward_total_ += reward;
-  ::std::cout<<"reward_total_:"<<reward_total_<<std::endl;
+  ::std::cout<<"completeness:"<<reward_total_<<std::endl;
   std_msgs::msg::Float32 reward_msg;
-  reward_msg.data = reward;
+  reward_msg.data = reward_total_;
   reward_pub_->publish(reward_msg);
   auto t_end_wall = ::std::chrono::high_resolution_clock::now();
   double merging_time_wall_ms =
@@ -153,7 +153,7 @@ void GlobalMapBuilder::CreateEnvironmentPointCloud() {
   for (int i = 0; i < dim_vg(0); i++) {
     for (int j = 0; j < dim_vg(1); j++) {
       for (int k = 0; k < dim_vg(2); k++) {
-        if (global_vg_shared_ptr_->IsOccupied(Eigen::Vector3i(i, j, k))) {
+        if (global_vg_shared_ptr_->IsUnknown(Eigen::Vector3i(i, j, k))) {
           ::pcl::PointXYZ pt;
           pt.x = i * vox_size + vox_size / 2 + origin_vg[0];
           pt.y = j * vox_size + vox_size / 2 + origin_vg[1];

@@ -67,6 +67,7 @@ Après avoir installé Gurobi, procédez à la compilation des packages suivants
 
 ## 3. Lancement et exécution du système
 
+D'abord copiez ppo_drone_exploration_model.zip dans le dossier clean_swarm
 Utilisez les commandes ci-dessous pour démarrer les différents composants de votre système :
 
 1. **Lancer RViz2 :**

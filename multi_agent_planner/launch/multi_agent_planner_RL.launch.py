@@ -22,15 +22,14 @@ def generate_launch_description():
     )
 
     # define params
-    n_rob = 1
-    voxel_grid_range = [5.0, 5.0, 5.0]
+    n_rob = 3
+    voxel_grid_range = [4.0, 4.0, 4.0]
     use_mapping_util = True
     free_grid = True
     save_stats = True
 
-    # calculate equidistant start and goal positions on the circle
-    start_positions = [(0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0)]
-    goal_positions = [(4.5, 4.5, 4.5, 0, 0, 0, 0, 0, 0)]
+    start_positions = [(38.5, 2.0, 3.5, 0, 0, 0, 0, 0, 0), (38.5, 18.0, 3.5, 0, 0, 0, 0, 0, 0), (38.5, 10.0, 3.5, 0, 0, 0, 0, 0, 0)]
+    goal_positions = [(38.5, 2.0, 3.5, 0, 0, 0, 0, 0, 0), (38.5, 18.0, 3.5, 0, 0, 0, 0, 0, 0), (38.5, 10.0, 3.5, 0, 0, 0, 0, 0, 0)]
 
     # create mapping nodes
     if use_mapping_util:
@@ -70,7 +69,7 @@ def generate_launch_description():
             executable='agent_node',
             name='agent_node_{}'.format(i),
             parameters=[config_planner] + params_sub,
-            # prefix=['xterm -fa default -fs 5 -xrm "XTerm*selectToClipboard: true" -e gdb -ex run --args'],
+            # prefix=['xterm -fa default -fs 10 -xrm "XTerm*selectToClipboard: true" -e gdb -ex run --args'],
             # prefix=['xterm -fa default -fs 10 -hold -e'],
             # prefix=prefix_tmp,
             output='screen',
