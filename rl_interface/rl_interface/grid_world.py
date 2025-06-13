@@ -14,6 +14,10 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from gymnasium.spaces import Box, Dict
 import time
+import csv
+import os
+import signal
+import datetime
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -197,9 +201,22 @@ class RLSubscriber(Node):
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
         self.sleep_between_obs = 2.0
-        self.old_time = time.time()
+        self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
         self.lstm_states = None
         self.dones = np.array([True], dtype=bool)
+        
+        # Reward tracking data
+        self.rewards = []
+        self.start_time = time.time()
+        
+        # CSV file setup
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.csv_path = f"/home/valentin/clean_swarm/gridworld_rewards_{timestamp}.csv"
+        self.setup_csv_file()
+        
+        # Register signal handlers for clean shutdown
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
 
         for i in range(self.n_rob_):
             pub_name = f"/agent_{i}/goal"
@@ -214,6 +231,16 @@ class RLSubscriber(Node):
 
         vg_sub_name = "global_map_builder_node/global_voxel_grid"
         self.create_subscription(VoxelGridStamped, vg_sub_name, self.global_vg_callback, 10)
+        
+        # Subscribe to the reward topic
+        reward_topic = "global_map_builder_node/map_reward"
+        self.reward_sub = self.create_subscription(
+            Float32,
+            reward_topic,
+            self.reward_callback,
+            10
+        )
+        self.get_logger().info(f"Subscribed to reward topic: {reward_topic}")
 
         self.timer_ = self.create_timer(self.time_goal_publish, self.timer_callback)
 
@@ -225,7 +252,6 @@ class RLSubscriber(Node):
             device=device,
         )
 
-
     def global_vg_callback(self, msg):
         self.gvg_dim = msg.voxel_grid.dimension
         full = np.array(msg.voxel_grid.data).reshape(self.gvg_dim)
@@ -236,6 +262,62 @@ class RLSubscriber(Node):
         if msg.poses:
             position = msg.poses[0].pose.position
             self.agent_pos_curr_[i] = [position.x, position.y, position.z]
+            
+            # Check if a new goal needs to be published
+            should_update = False
+            current_time = time.time()
+            
+            # Check conditions for publishing a new goal
+            if (len(self.agent_goal_curr_[i]) == 0 or 
+                np.linalg.norm(np.array(self.agent_pos_curr_[i]) - np.array(self.agent_goal_curr_[i])) < 0.01):
+                should_update = True
+            
+            # Also update if we've exceeded the time between observations
+            if current_time - self.agent_last_update_time[i] > self.sleep_between_obs:
+                should_update = True
+            
+            # Only update if needed and if we have the voxel grid
+            if should_update and self.gvg is not None:
+                self.agent_last_update_time[i] = current_time
+                
+                # Get a new goal for this agent
+                self.publish_new_goal_for_agent(i)
+
+    def publish_new_goal_for_agent(self, agent_idx):
+        # Prepare full drone positions array
+        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
+        
+        # Create a copy for normalization
+        normalized_positions = all_drone_positions.copy()
+        
+        # Normalize each drone's position correctly by subtracting origin first
+        for i in range(self.n_rob_):
+            drone_start = i * 3
+            drone_end = (i + 1) * 3
+            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
+        
+        obs = {
+            "observation": self.gvg,
+            "drone_positions": normalized_positions.astype(np.float32),
+        }
+        
+        # Rest of the function remains the same
+        episode_start = False if self.lstm_states is not None else True
+        
+        actions, self.lstm_states = self.actor_model.predict(
+            obs,
+            state=self.lstm_states,
+            episode_start=episode_start,
+            deterministic=True
+        )
+        
+        actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
+        
+        # Process action for the specific drone
+        current_position = self.agent_pos_curr_[agent_idx]
+        goal_point = self.direction_to_goal_point(current_position, actions[agent_idx], self.grid_origin, self.grid_real_dim)
+        goal_point = self.publish_safe_goal_point(current_position, goal_point, agent_idx)
+        self.get_logger().info(f"New goal published for agent_{agent_idx}: {goal_point.tolist()}")
 
     def direction_to_goal_point(self, drone_position, direction_vector, voxel_grid_origin, voxel_grid_dims):
         norm = np.linalg.norm(direction_vector)
@@ -260,7 +342,7 @@ class RLSubscriber(Node):
         goal_point = np.clip(goal_point, self.grid_origin + self.margin, self.grid_origin + self.grid_real_dim - self.margin)
         return goal_point
     
-    def publish_safe_goal_point(self, current_position, goal_point, max_distance=3.0):
+    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=5.0):
         """
         Publishes a goal that is at most max_distance away from the current position
         in the direction of the goal_point.
@@ -293,47 +375,63 @@ class RLSubscriber(Node):
         goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = safe_goal.tolist()
         
         # Update stored goals and publish
-        self.agent_goal_curr_[0] = safe_goal.tolist()
-        self.goal_pub_[0].publish(goal_msg)
+        self.agent_goal_curr_[indice] = safe_goal.tolist()
+        self.goal_pub_[indice].publish(goal_msg)
         
-        self.get_logger().info(f"Published safe goal: {safe_goal.tolist()} for agent_0 (original goal was {goal_point})")
+        self.get_logger().info(f"Published safe goal: {safe_goal.tolist()} for agent_{indice} (original goal was {goal_point})")
         
         return safe_goal
 
-    def timer_callback(self):
-        if self.gvg is None:
-            self.get_logger().warn("Global voxel grid not received yet.")
+    def setup_csv_file(self):
+        """Initialize the CSV file with headers."""
+        with open(self.csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Time (s)', 'Reward'])
+        self.get_logger().info(f"Created CSV file at: {self.csv_path}")
+    
+    def reward_callback(self, msg):
+        """Handle incoming reward messages."""
+        current_time = time.time() - self.start_time
+        reward_value = msg.data
+        
+        # Store the reward with timestamp
+        self.rewards.append((current_time, reward_value))
+        self.get_logger().info(f"Received reward: {reward_value} at time: {current_time:.2f}s")
+        
+        # Append to CSV file
+        with open(self.csv_path, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([f"{current_time:.6f}", f"{reward_value:.6f}"])
+    
+    def signal_handler(self, sig, frame):
+        """Handle clean shutdown and ensure data is saved."""
+        self.get_logger().info(f"Received signal {sig}, saving data and shutting down...")
+        self.save_rewards_to_csv()
+        # Continue with normal shutdown
+        rclpy.shutdown()
+    
+    def save_rewards_to_csv(self):
+        """Save all collected rewards to CSV file."""
+        if not self.rewards:
+            self.get_logger().info("No rewards to save.")
             return
-        time_callback = time.time()
-        if len(self.agent_goal_curr_[0]) == 0 or np.linalg.norm(np.array(self.agent_pos_curr_[0]) - np.array(self.agent_goal_curr_[0])) < 0.5 or time_callback - self.old_time > self.sleep_between_obs:
-            self.old_time = time_callback
-            obs = {
-                "observation": self.gvg,
-                "drone_positions": np.array(self.agent_pos_curr_[0]/np.array(self.grid_real_dim), dtype=np.float32).reshape(self.n_rob_* 3,),
-            }
+            
+        self.get_logger().info(f"Saving {len(self.rewards)} reward entries to {self.csv_path}")
+        
+        # Write all data at once (this is redundant with our continuous approach, but ensures everything is saved)
+        with open(self.csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Time (s)', 'Reward'])
+            for time_s, reward in self.rewards:
+                writer.writerow([f"{time_s:.6f}", f"{reward:.6f}"])
+        
+        self.get_logger().info(f"Rewards saved to {self.csv_path}")
 
-            actions, self.lstm_states = self.actor_model.predict(obs, state=self.lstm_states, episode_start=self.dones, deterministic=True)
-            actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
-            self.dones = np.array([False], dtype=bool)
-            goal_points = []
-            for i, action in enumerate(actions):
-                current_position = self.agent_pos_curr_[0]
-                goal_point = self.direction_to_goal_point(current_position, action, self.grid_origin, self.grid_real_dim)
-                goal_point = self.publish_safe_goal_point(current_position, goal_point)
-                goal_points.append(goal_point)
-            '''
-            goal_points = np.array(goal_points)
-            goal = goal_points[0]
-
-            goal_msg = PointStamped()
-            goal_msg.header.frame_id = "world"
-            goal_msg.header.stamp = self.get_clock().now().to_msg()
-            goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = goal.tolist()
-            self.agent_goal_curr_[0] = goal.tolist()
-            self.goal_pub_[0].publish(goal_msg)
-            self.get_logger().info(f"Published goal: {goal.tolist()} for agent_0")
-            '''
-
+    def timer_callback(self):
+        # The timer callback can remain, but we'll primarily rely on agent_traj_callback 
+        # for publishing goals as in rl_node.py
+        pass
+        
     def get_current_obs(self):
         """ Capture une observation actuelle sous forme de dict. """
         obs = {
@@ -348,9 +446,11 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
-    node.destroy_node()
-    rclpy.shutdown()
+        node.get_logger().info("Keyboard interrupt received, saving rewards and shutting down...")
+        node.save_rewards_to_csv()
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

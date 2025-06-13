@@ -27,7 +27,7 @@ voxel_size = 0.3
 grid_real_dim = [20.0, 20.0, 6.0]  # meters
 grid_dim = [67, 67, 20]  # number of voxels
 grid_origin = [0.0, 0.0, 0.0]  # meters
-num_drones = 2
+num_drones = 3
 
 
 class Custom3DGridExtractor(BaseFeaturesExtractor):
@@ -40,9 +40,7 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             nn.Conv3d(3, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
             nn.Conv3d(32, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
             nn.Conv3d(32,64,3,2,1), nn.ReLU(),
-            nn.Conv3d(64,64,3,2,1), nn.ReLU(),
             nn.Conv3d(64,128,3,1,1), nn.ReLU(),
-            nn.Conv3d(128,128,3,1,1), nn.ReLU(),
             nn.Flatten()
         )
         with torch.no_grad():
@@ -54,14 +52,10 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             nn.Linear(drone_shape[0],32), nn.ReLU(),
             nn.Linear(32,64), nn.ReLU(),
             nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
         )
         # fusion
         self.fuse = nn.Sequential(
-            nn.Linear(flat+64,2048), nn.ReLU(),
-            nn.Linear(2048,1024), nn.ReLU(),
+            nn.Linear(flat+64,1024), nn.ReLU(),
             nn.Linear(1024,512), nn.ReLU(),
             nn.Linear(512,features_dim), nn.ReLU()
         )
@@ -78,6 +72,8 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
         c = self.cnn3d(x)
         p = self.pos_mlp(obs["drone_positions"])
         return self.fuse(torch.cat([c,p],1))
+
+
 
 
 
@@ -104,18 +100,20 @@ class RLSubscriber(Node):
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
-        self.sleep_between_obs = 2.0
+        self.sleep_between_obs = 3.0
         self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
-        self.lstm_states = None
+        
+        # Initialize separate LSTM states for each drone
+        self.lstm_states = [None] * self.n_rob_
         self.dones = np.array([True] * self.n_rob_, dtype=bool)
-
+        
         # Reward tracking data
         self.rewards = []
         self.start_time = time.time()
         
         # CSV file setup
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.csv_path = f"/home/valentin/clean_swarm/2drones_rewards_{timestamp}.csv"
+        self.csv_path = f"/home/valentin/clean_swarm/independent_drones_rewards_{timestamp}.csv"
         self.setup_csv_file()
         
         # Register signal handlers for clean shutdown
@@ -145,15 +143,20 @@ class RLSubscriber(Node):
             10
         )
         self.get_logger().info(f"Subscribed to reward topic: {reward_topic}")
-
-        self.actor_model = RecurrentPPO.load(
-            "multi_drone_check_9500000_steps",
-            custom_objects={
-                "features_extractor_class": Custom3DGridExtractor,
-            },
-            device=device,
-        )
-
+        
+        # Load the single-drone model from grid_world for each drone
+        self.get_logger().info("Loading single-drone model for independent control...")
+        self.actor_models = []
+        for i in range(self.n_rob_):
+            model = RecurrentPPO.load(
+                "ppo_finetune_12500000_steps",  # This is the model from grid_world
+                custom_objects={
+                    "features_extractor_class": Custom3DGridExtractor,
+                },
+                device=device,
+            )
+            self.actor_models.append(model)
+            self.get_logger().info(f"Model {i+1}/{self.n_rob_} loaded successfully")
 
     def global_vg_callback(self, msg):
         self.gvg_dim = msg.voxel_grid.dimension
@@ -187,40 +190,34 @@ class RLSubscriber(Node):
                 self.publish_new_goal_for_agent(i)
 
     def publish_new_goal_for_agent(self, agent_idx):
-        # Prepare full drone positions array - reshape to make indexing clearer
-        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
+        # Create observation for just this agent (using single-drone format)
+        current_position = np.array(self.agent_pos_curr_[agent_idx])
         
-        # Create a copy for normalization
-        normalized_positions = all_drone_positions.copy()
+        # Normalize position for model input
+        normalized_position = (current_position - self.grid_origin) / self.grid_real_dim
         
-        # Normalize each drone's position correctly by subtracting origin first
-        for i in range(self.n_rob_):
-            drone_start = i * 3
-            drone_end = (i + 1) * 3
-            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
-        
+        # Create observation in the format expected by the single-drone model
         obs = {
             "observation": self.gvg,
-            "drone_positions": normalized_positions.astype(np.float32),
+            "drone_positions": normalized_position.astype(np.float32),
         }
         
-        # Rest of the function remains the same
-        episode_start = False if self.lstm_states is not None else True
+        # Get episode_start flag
+        episode_start = False if self.lstm_states[agent_idx] is not None else True
         
-        actions, self.lstm_states = self.actor_model.predict(
+        # Use the appropriate model for this agent
+        actions, self.lstm_states[agent_idx] = self.actor_models[agent_idx].predict(
             obs,
-            state=self.lstm_states,
+            state=self.lstm_states[agent_idx],
             episode_start=episode_start,
             deterministic=True
         )
         
-        actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
-        
-        # Process action for the specific drone
-        current_position = self.agent_pos_curr_[agent_idx]
-        goal_point = self.direction_to_goal_point(current_position, actions[agent_idx], self.grid_origin, self.grid_real_dim)
+        # Process the action for this specific drone
+        goal_point = self.direction_to_goal_point(current_position, actions, self.grid_origin, self.grid_real_dim)
         goal_point = self.publish_safe_goal_point(current_position, goal_point, agent_idx)
-        self.get_logger().info(f"New goal published for agent_{agent_idx}: {goal_point.tolist()}")
+        
+        self.get_logger().info(f"New goal published for agent_{agent_idx}: {goal_point.tolist()} (independent)")
 
     def direction_to_goal_point(self, drone_position, direction_vector, voxel_grid_origin, voxel_grid_dims):
         norm = np.linalg.norm(direction_vector)
@@ -304,7 +301,7 @@ class RLSubscriber(Node):
             "drone_positions": normalized_positions.astype(np.float32),
         }
         return obs
-    
+
     def setup_csv_file(self):
         """Initialize the CSV file with headers."""
         with open(self.csv_path, 'w', newline='') as csvfile:
@@ -364,3 +361,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+

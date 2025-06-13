@@ -18,6 +18,7 @@ import csv
 import os
 import signal
 import datetime
+import random
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,67 +28,11 @@ voxel_size = 0.3
 grid_real_dim = [20.0, 20.0, 6.0]  # meters
 grid_dim = [67, 67, 20]  # number of voxels
 grid_origin = [0.0, 0.0, 0.0]  # meters
-num_drones = 2
-
-
-class Custom3DGridExtractor(BaseFeaturesExtractor):
-    def __init__(self, observation_space, features_dim=256):
-        super().__init__(observation_space, features_dim)
-        D, H, W = observation_space.spaces["observation"].shape
-        drone_shape = observation_space.spaces["drone_positions"].shape
-        # 3D CNN
-        self.cnn3d = nn.Sequential(
-            nn.Conv3d(3, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
-            nn.Conv3d(32, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
-            nn.Conv3d(32,64,3,2,1), nn.ReLU(),
-            nn.Conv3d(64,64,3,2,1), nn.ReLU(),
-            nn.Conv3d(64,128,3,1,1), nn.ReLU(),
-            nn.Conv3d(128,128,3,1,1), nn.ReLU(),
-            nn.Flatten()
-        )
-        with torch.no_grad():
-            d = D//4; h = H//4; w = W//4
-            dummy = torch.zeros(1,3,d,h,w)
-            flat = self.cnn3d(dummy).shape[1]
-        # position MLP
-        self.pos_mlp = nn.Sequential(
-            nn.Linear(drone_shape[0],32), nn.ReLU(),
-            nn.Linear(32,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-        )
-        # fusion
-        self.fuse = nn.Sequential(
-            nn.Linear(flat+64,2048), nn.ReLU(),
-            nn.Linear(2048,1024), nn.ReLU(),
-            nn.Linear(1024,512), nn.ReLU(),
-            nn.Linear(512,features_dim), nn.ReLU()
-        )
-        self._features_dim = features_dim
-
-    def forward(self, obs):
-        v = obs["observation"].long()
-        u = (v==0).unsqueeze(1).float()
-        f = (v==1).unsqueeze(1).float()
-        o = (v==2).unsqueeze(1).float()
-        x = torch.cat([u,f,o],dim=1)
-        _, D, H, W = obs["observation"].shape
-        x = F.adaptive_avg_pool3d(x, output_size=(D//4, H//4, W//4))
-        c = self.cnn3d(x)
-        p = self.pos_mlp(obs["drone_positions"])
-        return self.fuse(torch.cat([c,p],1))
-
-
+num_drones = 1
 
 # ------------------------- Dummy Env for Model Loading -------------------------
 
 
-policy_kwargs = dict(
-    features_extractor_class=Custom3DGridExtractor,
-    features_extractor_kwargs=dict(features_dim=256),
-)
 
 # ------------------------- ROS2 Node -------------------------
 class RLSubscriber(Node):
@@ -104,18 +49,17 @@ class RLSubscriber(Node):
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
-        self.sleep_between_obs = 2.0
+        self.sleep_between_obs = 3.0
         self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
-        self.lstm_states = None
         self.dones = np.array([True] * self.n_rob_, dtype=bool)
-
+        
         # Reward tracking data
         self.rewards = []
         self.start_time = time.time()
         
         # CSV file setup
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.csv_path = f"/home/valentin/clean_swarm/2drones_rewards_{timestamp}.csv"
+        self.csv_path = f"/home/valentin/clean_swarm/random_1drone_rewards_{timestamp}.csv"
         self.setup_csv_file()
         
         # Register signal handlers for clean shutdown
@@ -143,15 +87,6 @@ class RLSubscriber(Node):
             reward_topic,
             self.reward_callback,
             10
-        )
-        self.get_logger().info(f"Subscribed to reward topic: {reward_topic}")
-
-        self.actor_model = RecurrentPPO.load(
-            "multi_drone_check_9500000_steps",
-            custom_objects={
-                "features_extractor_class": Custom3DGridExtractor,
-            },
-            device=device,
         )
 
 
@@ -187,33 +122,8 @@ class RLSubscriber(Node):
                 self.publish_new_goal_for_agent(i)
 
     def publish_new_goal_for_agent(self, agent_idx):
-        # Prepare full drone positions array - reshape to make indexing clearer
-        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
-        
-        # Create a copy for normalization
-        normalized_positions = all_drone_positions.copy()
-        
-        # Normalize each drone's position correctly by subtracting origin first
-        for i in range(self.n_rob_):
-            drone_start = i * 3
-            drone_end = (i + 1) * 3
-            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
-        
-        obs = {
-            "observation": self.gvg,
-            "drone_positions": normalized_positions.astype(np.float32),
-        }
-        
-        # Rest of the function remains the same
-        episode_start = False if self.lstm_states is not None else True
-        
-        actions, self.lstm_states = self.actor_model.predict(
-            obs,
-            state=self.lstm_states,
-            episode_start=episode_start,
-            deterministic=True
-        )
-        
+        actions = np.random.uniform(-1, 1, (self.n_rob_ * 3,))  # Random actions for exploration
+    
         actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
         
         # Process action for the specific drone
@@ -304,7 +214,7 @@ class RLSubscriber(Node):
             "drone_positions": normalized_positions.astype(np.float32),
         }
         return obs
-    
+
     def setup_csv_file(self):
         """Initialize the CSV file with headers."""
         with open(self.csv_path, 'w', newline='') as csvfile:
@@ -364,3 +274,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+

@@ -14,14 +14,18 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from gymnasium.spaces import Box, Dict
 import time
+import csv
+import os
+import signal
+import datetime
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 voxel_size = 0.3
-grid_real_dim = [20.0, 20.0, 6.0]  # meters
-grid_dim = [67, 67, 20]  # number of voxels
+grid_real_dim = [40.0, 20.0, 6.0]  # meters
+grid_dim = [134, 67, 20]  # number of voxels
 grid_origin = [0.0, 0.0, 0.0]  # meters
 num_drones = 3
 
@@ -40,7 +44,7 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             nn.Flatten()
         )
         with torch.no_grad():
-            d = D//4; h = H//4; w = W//4
+            d = D//8; h = H//4; w = W//4
             dummy = torch.zeros(1,3,d,h,w)
             flat = self.cnn3d(dummy).shape[1]
         # position MLP
@@ -64,7 +68,7 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
         o = (v==2).unsqueeze(1).float()
         x = torch.cat([u,f,o],dim=1)
         _, D, H, W = obs["observation"].shape
-        x = F.adaptive_avg_pool3d(x, output_size=(D//4, H//4, W//4))
+        x = F.adaptive_avg_pool3d(x, output_size=(D//8, H//4, W//4))
         c = self.cnn3d(x)
         p = self.pos_mlp(obs["drone_positions"])
         return self.fuse(torch.cat([c,p],1))
@@ -95,11 +99,24 @@ class RLSubscriber(Node):
         self.grid_real_dim = grid_real_dim
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
-        self.margin = 0.2
-        self.sleep_between_obs = 3.0
+        self.margin = 0.1
+        self.sleep_between_obs = 20.0
         self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
         self.lstm_states = None
         self.dones = np.array([True] * self.n_rob_, dtype=bool)
+        
+        # Reward tracking data
+        self.rewards = []
+        self.start_time = time.time()
+        
+        # CSV file setup
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.csv_path = f"/home/valentin/clean_swarm/rewards_{timestamp}.csv"
+        self.setup_csv_file()
+        
+        # Register signal handlers for clean shutdown
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
 
         for i in range(self.n_rob_):
             pub_name = f"/agent_{i}/goal"
@@ -114,8 +131,19 @@ class RLSubscriber(Node):
 
         vg_sub_name = "global_map_builder_node/global_voxel_grid"
         self.create_subscription(VoxelGridStamped, vg_sub_name, self.global_vg_callback, 10)
+        
+        # Subscribe to the reward topic
+        reward_topic = "global_map_builder_node/map_reward"
+        self.reward_sub = self.create_subscription(
+            Float32,
+            reward_topic,
+            self.reward_callback,
+            10
+        )
+        self.get_logger().info(f"Subscribed to reward topic: {reward_topic}")
+        
         self.observation_space = Dict({
-            "observation": gym.spaces.Box(low=0, high=2, shape=(67, 67, 20), dtype=np.uint8),
+            "observation": gym.spaces.Box(low=0, high=2, shape=tuple(grid_dim), dtype=np.uint8),
             "drone_positions": gym.spaces.Box(low=0, high=1, shape=(3*self.n_rob_,), dtype=np.float32)
         })
         self.action_space = gym.spaces.Box(low=-1, high=1, shape=(3*self.n_rob_,), dtype=np.float32)
@@ -167,17 +195,15 @@ class RLSubscriber(Node):
                 self.publish_new_goal_for_agent(i)
 
     def publish_new_goal_for_agent(self, agent_idx):
-        # Prepare full drone positions array - reshape to make indexing clearer
+        # Prepare full drone positions array
         all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
         
         # Create a copy for normalization
         normalized_positions = all_drone_positions.copy()
         
-        # Normalize each drone's position correctly by subtracting origin first
+        # Normalize using the requested pattern
         for i in range(self.n_rob_):
-            drone_start = i * 3
-            drone_end = (i + 1) * 3
-            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
+            normalized_positions[i*3:(i+1)*3] = (all_drone_positions[i*3:(i+1)*3] - self.grid_origin) / self.grid_real_dim
         
         obs = {
             "observation": self.gvg,
@@ -225,7 +251,7 @@ class RLSubscriber(Node):
         goal_point = np.clip(goal_point, self.grid_origin + self.margin, self.grid_origin + self.grid_real_dim - self.margin)
         return goal_point
     
-    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=5.0):
+    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=100.0):
         """
         Publishes a goal that is at most max_distance away from the current position
         in the direction of the goal_point.
@@ -285,15 +311,62 @@ class RLSubscriber(Node):
         }
         return obs
 
+    def setup_csv_file(self):
+        """Initialize the CSV file with headers."""
+        with open(self.csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Time (s)', 'Reward'])
+        self.get_logger().info(f"Created CSV file at: {self.csv_path}")
+    
+    def reward_callback(self, msg):
+        """Handle incoming reward messages."""
+        current_time = time.time() - self.start_time
+        reward_value = msg.data
+        
+        # Store the reward with timestamp
+        self.rewards.append((current_time, reward_value))
+        self.get_logger().info(f"Received reward: {reward_value} at time: {current_time:.2f}s")
+        
+        # Append to CSV file
+        with open(self.csv_path, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([f"{current_time:.6f}", f"{reward_value:.6f}"])
+    
+    def signal_handler(self, sig, frame):
+        """Handle clean shutdown and ensure data is saved."""
+        self.get_logger().info(f"Received signal {sig}, saving data and shutting down...")
+        self.save_rewards_to_csv()
+        # Continue with normal shutdown
+        rclpy.shutdown()
+    
+    def save_rewards_to_csv(self):
+        """Save all collected rewards to CSV file."""
+        if not self.rewards:
+            self.get_logger().info("No rewards to save.")
+            return
+            
+        self.get_logger().info(f"Saving {len(self.rewards)} reward entries to {self.csv_path}")
+        
+        # Write all data at once (this is redundant with our continuous approach, but ensures everything is saved)
+        with open(self.csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Time (s)', 'Reward'])
+            for time_s, reward in self.rewards:
+                writer.writerow([f"{time_s:.6f}", f"{reward:.6f}"])
+        
+        self.get_logger().info(f"Rewards saved to {self.csv_path}")
+
 def main(args=None):
     rclpy.init(args=args)
     node = RLSubscriber()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
-    node.destroy_node()
-    rclpy.shutdown()
+        node.get_logger().info("Keyboard interrupt received, saving rewards and shutting down...")
+        node.save_rewards_to_csv()
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

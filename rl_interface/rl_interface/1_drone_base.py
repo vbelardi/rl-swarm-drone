@@ -14,10 +14,6 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from gymnasium.spaces import Box, Dict
 import time
-import csv
-import os
-import signal
-import datetime
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,14 +23,112 @@ voxel_size = 0.3
 grid_real_dim = [20.0, 20.0, 6.0]  # meters
 grid_dim = [67, 67, 20]  # number of voxels
 grid_origin = [0.0, 0.0, 0.0]  # meters
-num_drones = 2
+num_drones = 1
+
+
+def downsample_voxel_grid_onehot(voxel_input, output_size):
+    """
+    Downsamples a one-hot encoded voxel grid (B, 3, D, H, W) using nearest neighbor,
+    preserving one-hot exclusivity.
+    """
+    # Convert one-hot to label
+    labels = torch.argmax(voxel_input, dim=1)  # (B, D, H, W)
+
+    # Downsample using nearest neighbor
+    labels = labels.unsqueeze(1).float()
+    labels_downsampled = torch.nn.functional.interpolate(labels, size=output_size, mode='nearest')
+    labels_downsampled = labels_downsampled.squeeze(1).long()
+
+    # Convert back to one-hot
+    voxel_downsampled = torch.nn.functional.one_hot(labels_downsampled, num_classes=3)
+    voxel_downsampled = voxel_downsampled.permute(0, 4, 1, 2, 3).float()
+
+    return voxel_downsampled
+
+def downsample_voxel_grid_priority(voxel_input, output_size):
+    """
+    Downsamples a one-hot encoded voxel grid (B, 3, D, H, W) with priority: obstacle > unknown > free.
+    Uses adaptive max-pooling per channel to preserve priority blocks.
+    
+    Args:
+      voxel_input: Tensor of shape (B,3,D,H,W), one-hot encoding of {unknown,free,obstacle}.
+      output_size: tuple (d2, h2, w2) target grid size.
+    Returns:
+      voxel_down: Tensor of shape (B,3,d2,h2,w2), one-hot with priority applied.
+    """
+    # 1) Extract per-class masks
+    unk_mask  = voxel_input[:, 0:1]  # (B,1,D,H,W)
+    free_mask = voxel_input[:, 1:2]
+    obs_mask  = voxel_input[:, 2:3]
+    
+    # 2) Adaptive max-pool each mask to output_size
+    unk_ds  = F.adaptive_max_pool3d(unk_mask,  output_size).squeeze(1)  # (B, D2,H2,W2)
+    free_ds = F.adaptive_max_pool3d(free_mask, output_size).squeeze(1)
+    obs_ds  = F.adaptive_max_pool3d(obs_mask,  output_size).squeeze(1)
+    
+    # 3) Build label grid with priority
+    # default = free (1)
+    labels = torch.ones_like(obs_ds, dtype=torch.long)
+    # override unknown (0) where unk_ds>0
+    labels[unk_ds > 0] = 0
+    # override obstacle (2) where obs_ds>0  (highest priority)
+    labels[obs_ds > 0] = 2
+    
+    # 4) Convert back to one-hot
+    voxel_down = F.one_hot(labels, num_classes=3)        # (B, D2,H2,W2, 3)
+    voxel_down = voxel_down.permute(0, 4, 1, 2, 3).float()  # (B,3,D2,H2,W2)
+    return voxel_down
+
+
+'''
+class Custom3DGridExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=256):
+        super().__init__(observation_space, features_dim)
+        D, H, W = observation_space.spaces["observation"].shape
+        # 3D CNN
+        self.cnn3d = nn.Sequential(
+            nn.Conv3d(3, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
+            nn.Conv3d(32,32,3,2,1), nn.ReLU(),
+            nn.Conv3d(32,64,3,2,1), nn.ReLU(),
+            nn.Conv3d(64,64,3,1,1), nn.ReLU(),
+            nn.Flatten()
+        )
+        with torch.no_grad():
+            d = D//4; h = H//4; w = W//4
+            dummy = torch.zeros(1,3,d,h,w)
+            flat = self.cnn3d(dummy).shape[1]
+        # position MLP
+        self.pos_mlp = nn.Sequential(
+            nn.Linear(3,32), nn.ReLU(),
+            nn.Linear(32,32), nn.ReLU()
+        )
+        # fusion
+        self.fuse = nn.Sequential(
+            nn.Linear(flat+32,1024), nn.ReLU(),
+            nn.Linear(1024,512), nn.ReLU(),
+            nn.Linear(512,features_dim), nn.ReLU()
+        )
+        self._features_dim = features_dim
+
+    def forward(self, obs):
+        v = obs["observation"].long()
+        u = (v==0).unsqueeze(1).float()
+        f = (v==1).unsqueeze(1).float()
+        o = (v==2).unsqueeze(1).float()
+        x = torch.cat([u,f,o],dim=1)
+        _, D, H, W = obs["observation"].shape
+        x = F.adaptive_avg_pool3d(x, output_size=(D//4, H//4, W//4))
+        c = self.cnn3d(x)
+        p = self.pos_mlp(obs["drone_positions"])
+        return self.fuse(torch.cat([c,p],1))
+
+'''
 
 
 class Custom3DGridExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, features_dim=256):
         super().__init__(observation_space, features_dim)
         D, H, W = observation_space.spaces["observation"].shape
-        drone_shape = observation_space.spaces["drone_positions"].shape
         # 3D CNN
         self.cnn3d = nn.Sequential(
             nn.Conv3d(3, 32, (5,5,3), (2,2,1), (1,1,1)), nn.ReLU(),
@@ -51,11 +145,8 @@ class Custom3DGridExtractor(BaseFeaturesExtractor):
             flat = self.cnn3d(dummy).shape[1]
         # position MLP
         self.pos_mlp = nn.Sequential(
-            nn.Linear(drone_shape[0],32), nn.ReLU(),
+            nn.Linear(3,32), nn.ReLU(),
             nn.Linear(32,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
-            nn.Linear(64,64), nn.ReLU(),
             nn.Linear(64,64), nn.ReLU(),
         )
         # fusion
@@ -100,27 +191,15 @@ class RLSubscriber(Node):
         self.pos_sub_ = {}
         self.agent_goal_curr_ = [[] for _ in range(self.n_rob_)]
         self.agent_pos_curr_ = [[1.0, 1.0, 1.0] for _ in range(self.n_rob_)]
+        self.time_goal_publish = 0.1
         self.grid_real_dim = grid_real_dim
         self.grid_dim = grid_dim
         self.grid_origin = np.array(grid_origin)
         self.margin = 0.2
         self.sleep_between_obs = 2.0
-        self.agent_last_update_time = [time.time() for _ in range(self.n_rob_)]
+        self.old_time = time.time()
         self.lstm_states = None
-        self.dones = np.array([True] * self.n_rob_, dtype=bool)
-
-        # Reward tracking data
-        self.rewards = []
-        self.start_time = time.time()
-        
-        # CSV file setup
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.csv_path = f"/home/valentin/clean_swarm/2drones_rewards_{timestamp}.csv"
-        self.setup_csv_file()
-        
-        # Register signal handlers for clean shutdown
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
+        self.dones = np.array([True], dtype=bool)
 
         for i in range(self.n_rob_):
             pub_name = f"/agent_{i}/goal"
@@ -135,19 +214,11 @@ class RLSubscriber(Node):
 
         vg_sub_name = "global_map_builder_node/global_voxel_grid"
         self.create_subscription(VoxelGridStamped, vg_sub_name, self.global_vg_callback, 10)
-        
-        # Subscribe to the reward topic
-        reward_topic = "global_map_builder_node/map_reward"
-        self.reward_sub = self.create_subscription(
-            Float32,
-            reward_topic,
-            self.reward_callback,
-            10
-        )
-        self.get_logger().info(f"Subscribed to reward topic: {reward_topic}")
+
+        self.timer_ = self.create_timer(self.time_goal_publish, self.timer_callback)
 
         self.actor_model = RecurrentPPO.load(
-            "multi_drone_check_9500000_steps",
+            "ppo_finetune_12500000_steps",
             custom_objects={
                 "features_extractor_class": Custom3DGridExtractor,
             },
@@ -165,62 +236,6 @@ class RLSubscriber(Node):
         if msg.poses:
             position = msg.poses[0].pose.position
             self.agent_pos_curr_[i] = [position.x, position.y, position.z]
-            
-            # Check if a new goal needs to be published
-            should_update = False
-            current_time = time.time()
-            
-            # Check conditions for publishing a new goal
-            if (len(self.agent_goal_curr_[i]) == 0 or 
-                np.linalg.norm(np.array(self.agent_pos_curr_[i]) - np.array(self.agent_goal_curr_[i])) < 0.01):
-                should_update = True
-            
-            # Also update if we've exceeded the time between observations
-            if current_time - self.agent_last_update_time[i] > self.sleep_between_obs:
-                should_update = True
-            
-            # Only update if needed and if we have the voxel grid
-            if should_update and self.gvg is not None:
-                self.agent_last_update_time[i] = current_time
-                
-                # Get a new goal for this agent
-                self.publish_new_goal_for_agent(i)
-
-    def publish_new_goal_for_agent(self, agent_idx):
-        # Prepare full drone positions array - reshape to make indexing clearer
-        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
-        
-        # Create a copy for normalization
-        normalized_positions = all_drone_positions.copy()
-        
-        # Normalize each drone's position correctly by subtracting origin first
-        for i in range(self.n_rob_):
-            drone_start = i * 3
-            drone_end = (i + 1) * 3
-            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
-        
-        obs = {
-            "observation": self.gvg,
-            "drone_positions": normalized_positions.astype(np.float32),
-        }
-        
-        # Rest of the function remains the same
-        episode_start = False if self.lstm_states is not None else True
-        
-        actions, self.lstm_states = self.actor_model.predict(
-            obs,
-            state=self.lstm_states,
-            episode_start=episode_start,
-            deterministic=True
-        )
-        
-        actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
-        
-        # Process action for the specific drone
-        current_position = self.agent_pos_curr_[agent_idx]
-        goal_point = self.direction_to_goal_point(current_position, actions[agent_idx], self.grid_origin, self.grid_real_dim)
-        goal_point = self.publish_safe_goal_point(current_position, goal_point, agent_idx)
-        self.get_logger().info(f"New goal published for agent_{agent_idx}: {goal_point.tolist()}")
 
     def direction_to_goal_point(self, drone_position, direction_vector, voxel_grid_origin, voxel_grid_dims):
         norm = np.linalg.norm(direction_vector)
@@ -245,7 +260,7 @@ class RLSubscriber(Node):
         goal_point = np.clip(goal_point, self.grid_origin + self.margin, self.grid_origin + self.grid_real_dim - self.margin)
         return goal_point
     
-    def publish_safe_goal_point(self, current_position, goal_point, indice, max_distance=5.0):
+    def publish_safe_goal_point(self, current_position, goal_point, max_distance=3.0):
         """
         Publishes a goal that is at most max_distance away from the current position
         in the direction of the goal_point.
@@ -278,77 +293,54 @@ class RLSubscriber(Node):
         goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = safe_goal.tolist()
         
         # Update stored goals and publish
-        self.agent_goal_curr_[indice] = safe_goal.tolist()
-        self.goal_pub_[indice].publish(goal_msg)
+        self.agent_goal_curr_[0] = safe_goal.tolist()
+        self.goal_pub_[0].publish(goal_msg)
         
-        self.get_logger().info(f"Published safe goal: {safe_goal.tolist()} for agent_{indice} (original goal was {goal_point})")
+        self.get_logger().info(f"Published safe goal: {safe_goal.tolist()} for agent_0 (original goal was {goal_point})")
         
         return safe_goal
-    
+
+    def timer_callback(self):
+        if self.gvg is None:
+            self.get_logger().warn("Global voxel grid not received yet.")
+            return
+        time_callback = time.time()
+        if len(self.agent_goal_curr_[0]) == 0 or np.linalg.norm(np.array(self.agent_pos_curr_[0]) - np.array(self.agent_goal_curr_[0])) < 0.5 or time_callback - self.old_time > self.sleep_between_obs:
+            self.old_time = time_callback
+            obs = {
+                "observation": self.gvg,
+                "drone_positions": np.array(self.agent_pos_curr_[0]/np.array(self.grid_real_dim), dtype=np.float32).reshape(self.n_rob_* 3,),
+            }
+
+            actions, self.lstm_states = self.actor_model.predict(obs, state=self.lstm_states, episode_start=self.dones, deterministic=True)
+            actions = np.array(actions, dtype=np.float32).reshape(self.n_rob_, 3)
+            self.dones = np.array([False], dtype=bool)
+            goal_points = []
+            for i, action in enumerate(actions):
+                current_position = self.agent_pos_curr_[0]
+                goal_point = self.direction_to_goal_point(current_position, action, self.grid_origin, self.grid_real_dim)
+                goal_point = self.publish_safe_goal_point(current_position, goal_point)
+                goal_points.append(goal_point)
+            '''
+            goal_points = np.array(goal_points)
+            goal = goal_points[0]
+
+            goal_msg = PointStamped()
+            goal_msg.header.frame_id = "world"
+            goal_msg.header.stamp = self.get_clock().now().to_msg()
+            goal_msg.point.x, goal_msg.point.y, goal_msg.point.z = goal.tolist()
+            self.agent_goal_curr_[0] = goal.tolist()
+            self.goal_pub_[0].publish(goal_msg)
+            self.get_logger().info(f"Published goal: {goal.tolist()} for agent_0")
+            '''
+
     def get_current_obs(self):
         """ Capture une observation actuelle sous forme de dict. """
-        # Prepare full drone positions array
-        all_drone_positions = np.array([pos for pos in self.agent_pos_curr_]).flatten()
-        
-        # Create a copy for normalization
-        normalized_positions = all_drone_positions.copy()
-        
-        # Normalize each drone's position correctly
-        for i in range(self.n_rob_):
-            drone_start = i * 3
-            drone_end = (i + 1) * 3
-            normalized_positions[drone_start:drone_end] = (all_drone_positions[drone_start:drone_end] - self.grid_origin) / self.grid_real_dim
-        
         obs = {
-            "observation": self.gvg.copy(),
-            "drone_positions": normalized_positions.astype(np.float32),
+            "observation": self.gvg.copy(),  # Important de copier pour ne pas écraser
+            "drone_positions": np.array(self.agent_pos_curr_[0]/np.array(self.grid_real_dim), dtype=np.float32).reshape(self.n_rob_ * 3,),
         }
         return obs
-    
-    def setup_csv_file(self):
-        """Initialize the CSV file with headers."""
-        with open(self.csv_path, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['Time (s)', 'Reward'])
-        self.get_logger().info(f"Created CSV file at: {self.csv_path}")
-    
-    def reward_callback(self, msg):
-        """Handle incoming reward messages."""
-        current_time = time.time() - self.start_time
-        reward_value = msg.data
-        
-        # Store the reward with timestamp
-        self.rewards.append((current_time, reward_value))
-        self.get_logger().info(f"Received reward: {reward_value} at time: {current_time:.2f}s")
-        
-        # Append to CSV file
-        with open(self.csv_path, 'a', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow([f"{current_time:.6f}", f"{reward_value:.6f}"])
-    
-    def signal_handler(self, sig, frame):
-        """Handle clean shutdown and ensure data is saved."""
-        self.get_logger().info(f"Received signal {sig}, saving data and shutting down...")
-        self.save_rewards_to_csv()
-        # Continue with normal shutdown
-        rclpy.shutdown()
-    
-    def save_rewards_to_csv(self):
-        """Save all collected rewards to CSV file."""
-        if not self.rewards:
-            self.get_logger().info("No rewards to save.")
-            return
-            
-        self.get_logger().info(f"Saving {len(self.rewards)} reward entries to {self.csv_path}")
-        
-        # Write all data at once (this is redundant with our continuous approach, but ensures everything is saved)
-        with open(self.csv_path, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['Time (s)', 'Reward'])
-            for time_s, reward in self.rewards:
-                writer.writerow([f"{time_s:.6f}", f"{reward:.6f}"])
-        
-        self.get_logger().info(f"Rewards saved to {self.csv_path}")
 
 def main(args=None):
     rclpy.init(args=args)
@@ -356,11 +348,9 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("Keyboard interrupt received, saving rewards and shutting down...")
-        node.save_rewards_to_csv()
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        pass
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

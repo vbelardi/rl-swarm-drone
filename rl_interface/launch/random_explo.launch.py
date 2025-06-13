@@ -11,8 +11,8 @@ def generate_launch_description():
 
     rl_node = Node(
         package='rl_interface',     
-        executable='rl_node',
-        name='rl_node',              
+        executable='random_exploration',         
+        name='random_exploration',              
         parameters=[config],           
         output='screen',                
         emulate_tty=True                 

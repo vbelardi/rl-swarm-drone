@@ -11,6 +11,9 @@ setup(
         "console_scripts": [
             "rl_node = rl_interface.rl_node:main",
             "grid_world = rl_interface.grid_world:main",
+            "2_drones = rl_interface.2_drones:main",
+            "random_exploration = rl_interface.random_exploration:main",
+            "3drones_test_no_coord = rl_interface.3drones_test_no_coord:main",
         ],
     },
     data_files=[
@@ -18,5 +21,6 @@ setup(
         ('share/ament_index/resource_index/packagenames', ['package.xml']),
         # This copies your launch directory and its files.
         ('share/rl_interface/launch', ['launch/rl.launch.py']),
+        ('share/rl_interface/launch', ['launch/random_explo.launch.py']),
     ],
 )
